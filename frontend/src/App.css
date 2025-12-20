@@ -1,0 +1,7 @@
+.app-layout { min-height: 100vh; display: flex; flex-direction: column; }
+.app-header { padding: 12px 14px; background: white; border-bottom: 1px solid #e6e6e6; }
+.app-title { font-weight: 800; margin-bottom: 8px; }
+.app-tabs { display: flex; gap: 10px; flex-wrap: wrap; }
+.tab { text-decoration: none; color: #111; padding: 8px 10px; border-radius: 10px; border: 1px solid #ddd; }
+.tab-active { background: #111; color: #fff; border-color: #111; }
+.app-main { flex: 1; }

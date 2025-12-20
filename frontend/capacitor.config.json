@@ -1,0 +1,8 @@
+{
+  "appId": "com.vinetech.qrsheets",
+  "appName": "QR Sheets",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "https"
+  }
+}

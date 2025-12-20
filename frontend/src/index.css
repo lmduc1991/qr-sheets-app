@@ -1,0 +1,13 @@
+:root { font-family: system-ui, Arial, sans-serif; }
+body { margin: 0; background: #fafafa; color: #111; }
+.page { padding: 14px; }
+.card { background: white; border: 1px solid #e6e6e6; border-radius: 12px; padding: 12px; margin-bottom: 12px; }
+.grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+.field { display: grid; gap: 6px; font-size: 14px; }
+input, select { padding: 10px; border-radius: 10px; border: 1px solid #dcdcdc; }
+button { padding: 10px 12px; border-radius: 10px; border: 1px solid #ccc; background: white; cursor: pointer; }
+button.primary { background: #111; color: white; border-color: #111; }
+.alert { padding: 10px; border: 1px solid #ddd; border-radius: 10px; background: #fff; margin-bottom: 10px; }
+.alert-error { border-color: #f5c2c7; background: #f8d7da; }
+.alert-ok { border-color: #badbcc; background: #d1e7dd; }
+.file-btn { display: inline-block; padding: 10px 12px; border-radius: 10px; border: 1px solid #ccc; background: #111; color: #fff; cursor: pointer; }

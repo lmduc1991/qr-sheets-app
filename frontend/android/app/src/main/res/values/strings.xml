@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">QR Sheets</string>
+    <string name="title_activity_main">QR Sheets</string>
+    <string name="package_name">com.vinetech.qrsheets</string>
+    <string name="custom_url_scheme">com.vinetech.qrsheets</string>
+</resources>
