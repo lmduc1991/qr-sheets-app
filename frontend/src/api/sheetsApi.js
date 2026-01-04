@@ -1,5 +1,6 @@
 // frontend/src/api/sheetsApi.js
 import { loadSettings } from "../store/settingsStore";
+import netlifyIdentity from "netlify-identity-widget";
 
 const mem = {
   item: new Map(), // key -> { data, exp }
@@ -29,25 +30,52 @@ function invalidateKey(key) {
   mem.combo.delete(key);
 }
 
+/**
+ * Returns Authorization header for Netlify Identity.
+ * Uses user.jwt() (refresh-safe) rather than reading a potentially stale token.
+ */
+async function getAuthHeader() {
+  const user = netlifyIdentity.currentUser();
+  if (!user) return {};
+  const jwt = await user.jwt(); // refresh-safe
+  return { Authorization: `Bearer ${jwt}` };
+}
+
 async function callApi(action, payload, { timeoutMs = 12000 } = {}) {
   const s = loadSettings();
   if (!s?.proxyUrl) throw new Error("Missing Proxy URL. Go to Setup and save settings first.");
+
+  // Require login (defense-in-depth; you also guard in App.jsx)
+  const user = netlifyIdentity.currentUser();
+  if (!user) throw new Error("You are not logged in. Please login first.");
 
   const controller = new AbortController();
   const t = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
+    const authHeader = await getAuthHeader();
+
     const resp = await fetch(s.proxyUrl, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: {
+        "content-type": "application/json",
+        ...authHeader,
+      },
       body: JSON.stringify({ action, payload }),
       signal: controller.signal,
     });
 
     const data = await resp.json().catch(() => ({}));
+
+    // If Worker returns 401/403, surface a clean message
+    if (resp.status === 401 || resp.status === 403) {
+      throw new Error(data?.error || "Unauthorized. Please login again.");
+    }
+
     if (!resp.ok || data?.ok === false) {
       throw new Error(data?.error || `Request failed (${resp.status})`);
     }
+
     return data;
   } catch (e) {
     if (e?.name === "AbortError") throw new Error("Request timed out. Check internet or Apps Script.");
