@@ -8,8 +8,11 @@ import ItemsManagementPage from "./pages/ItemsManagementPage";
 import HarvestManagementPage from "./pages/HarvestManagementPage";
 import BinStoragePage from "./pages/BinStoragePage";
 import { loadSettings, onSettingsChange } from "./store/settingsStore";
+import { useT } from "./i18n";
 
 export default function App() {
+  const { t } = useT();
+
   // ---------------------------
   // Existing settings logic
   // ---------------------------
@@ -42,14 +45,14 @@ export default function App() {
     return (
       <div className="app-layout">
         <header className="app-header">
-          <div className="app-title">QR Sheets App</div>
+          <div className="app-title">{t("app_title")}</div>
           <button onClick={() => netlifyIdentity.open("login")} className="login-btn">
-            Login
+            {t("login")}
           </button>
         </header>
 
         <main className="app-main">
-          <p>Please log in to use this application.</p>
+          <p>{t("please_login")}</p>
         </main>
       </div>
     );
@@ -61,30 +64,30 @@ export default function App() {
   return (
     <div className="app-layout">
       <header className="app-header">
-        <div className="app-title">QR Sheets App</div>
+        <div className="app-title">{t("app_title")}</div>
 
         <nav className="app-tabs">
           <NavLink className={({ isActive }) => "tab" + (isActive ? " tab-active" : "")} to="/items">
-            Item Management
+            {t("tab_items")}
           </NavLink>
 
           <NavLink className={({ isActive }) => "tab" + (isActive ? " tab-active" : "")} to="/harvest">
-            Harvest Management
+            {t("tab_harvest")}
           </NavLink>
 
           <NavLink className={({ isActive }) => "tab" + (isActive ? " tab-active" : "")} to="/storage">
-            Bin Storage
+            {t("tab_storage")}
           </NavLink>
 
           <NavLink className={({ isActive }) => "tab" + (isActive ? " tab-active" : "")} to="/setup">
-            Setup
+            {t("tab_setup")}
           </NavLink>
         </nav>
 
         <div className="login-status">
           <span className="login-email">{user.email}</span>
           <button onClick={() => netlifyIdentity.logout()} className="logout-btn">
-            Logout
+            {t("logout")}
           </button>
         </div>
       </header>
@@ -94,20 +97,11 @@ export default function App() {
           <Route path="/" element={<Navigate to={hasSetup ? "/items" : "/setup"} replace />} />
           <Route path="/setup" element={<SetupPage />} />
 
-          <Route
-            path="/items/*"
-            element={hasSetup ? <ItemsManagementPage /> : <Navigate to="/setup" replace />}
-          />
+          <Route path="/items/*" element={hasSetup ? <ItemsManagementPage /> : <Navigate to="/setup" replace />} />
 
-          <Route
-            path="/harvest"
-            element={hasSetup ? <HarvestManagementPage /> : <Navigate to="/setup" replace />}
-          />
+          <Route path="/harvest" element={hasSetup ? <HarvestManagementPage /> : <Navigate to="/setup" replace />} />
 
-          <Route
-            path="/storage"
-            element={hasSetup ? <BinStoragePage /> : <Navigate to="/setup" replace />}
-          />
+          <Route path="/storage" element={hasSetup ? <BinStoragePage /> : <Navigate to="/setup" replace />} />
 
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
