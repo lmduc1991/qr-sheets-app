@@ -1,586 +1,182 @@
-// src/i18n.js
 import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
-import { loadSettings, onSettingsChange } from "./store/settingsStore";
+import { loadSettings, onSettingsChange, saveSettings } from "./store/settingsStore";
 
 /**
- * Translation dictionary.
- * Add more keys anytime you see a new hardcoded string in the UI.
+ * Simple i18n system:
+ * - language stored in settingsStore (localStorage)
+ * - use t("key") in UI
  */
+
+const I18nCtx = createContext({
+  lang: "en",
+  setLang: () => {},
+  t: (key) => key,
+});
+
 const DICT = {
   en: {
-    // App / Auth
+    // App / Tabs
     app_title: "QR Sheets App",
-    login: "Login",
-    logout: "Logout",
-    please_login: "Please log in to use this application.",
-
-    // Tabs
     tab_items: "Item Management",
     tab_harvest: "Harvest Management",
-    tab_storage: "Bin Storage",
     tab_setup: "Setup",
 
-    // Common
-    language: "Language",
-    english: "English",
-    vietnamese: "Vietnamese",
-    spanish: "Spanish",
-    save: "Save",
-    saving: "Saving…",
-    close: "Close",
-    back: "Back",
-    cancel: "Cancel",
-    stop: "Stop",
-    done: "Done",
-    edit: "Edit",
-    cancel_edit: "Cancel Edit",
-
     // Setup
-    setup: "Setup",
-    proxy_url: "Proxy URL",
-    cloudflare_worker_url: "Cloudflare Worker URL",
-    items_sheet_title: "Items Sheet (942 - Vine Master Inventory)",
-    google_sheet_link: "Google Sheet link",
-    tab_name: "Tab name",
-    load_columns: "Load Columns",
-    loading: "Loading…",
-    key_column_help: "Key Column (QR contains this value)",
-    harvest_setup_moved:
-      "Harvest Log setup is now inside the Harvest tab (only required if you use Harvest).",
-    save_setup: "Save Setup",
-    clear_saved_setup: "Clear Saved Setup",
-    msg_cleared_settings: "Cleared saved settings.",
-    err_proxy_required_worker: "Proxy URL is required (Cloudflare Worker URL).",
-    err_items_link_invalid_id: "Items Sheet link invalid (cannot find spreadsheet ID).",
+    setup_title: "Setup",
+    setup_proxy_title: "1) Proxy URL",
+    setup_proxy_label: "Cloudflare Worker URL",
+    setup_items_title: "2) Items Sheet (942 - Vine Master Inventory)",
+    setup_sheet_link: "Google Sheet link",
+    setup_tab_name: "Tab name",
+    setup_load_columns: "Load Columns",
+    setup_loading: "Loading...",
+    setup_key_column: "Key Column (QR contains this value)",
+    setup_harvest_title: "3) Harvest Log Sheet (2026 Harvesting Log)",
+    setup_save: "Save Setup",
+    setup_clear: "Clear Saved Setup",
+
+    // Setup messages/errors
+    err_proxy_required: "Proxy URL is required (Cloudflare Worker URL).",
+    err_items_link_invalid: "Items Sheet link invalid (cannot find spreadsheet ID).",
     err_items_tab_required: "Items tab name is required.",
-    msg_columns_loaded_choose_key: "Columns loaded. Please choose Key Column.",
-    err_proxy_required: "Proxy URL is required.",
-    err_items_link_invalid: "Items Sheet link invalid.",
-    err_key_column_required: "Key Column is required. Click Load Columns first.",
-
-    // Items Management
-    items_title: "Item Management",
-    scan: "Scan",
-    bulk_scan: "Bulk Scan",
-
-    // Item Scan
-    status_loading_item: "Loading item...",
-    status_item_loaded: "Item loaded.",
-    err_item_not_found_in: "Item not found in",
-    err_failed_load_item: "Failed to load item.",
-    status_saving: "Saving...",
-    err_save_failed: "Save failed.",
-    status_saved_updated_fields: "Saved. Updated fields:",
-    scan_another: "Scan Another",
-    label_scan_key_column: "Scan QR from your Key Column",
-    label_items_tab: "Items tab",
-    label_key: "Key",
-    label_item_details: "Item details",
-    help_edit_except_key: "Edit all columns except Key ID",
-
-    // Bulk Scan
-    status_loading_columns: "Loading columns...",
-    status_columns_loaded: "Columns loaded.",
-    err_failed_load_columns: "Failed to load columns.",
-    err_no_scanned_keys: "No scanned keys yet.",
-    err_no_fields_entered: "No fields entered. Fill at least 1 field to update.",
-    status_bulk_updated: "Bulk updated:",
-    status_not_found: "Not found:",
-    err_bulk_update_failed: "Bulk update failed.",
-    help_scan_many_keys: "Scan many QR codes. Keys scanned:",
-    clear_scans: "Clear Scans",
-    msg_cleared_scanned_keys: "Cleared scanned keys.",
-    copy_all: "Copy All",
-    msg_copied_clipboard: "Copied scanned keys to clipboard.",
-    err_copy_failed: "Copy failed (clipboard not available).",
-    scanned_items: "Scanned Items",
-    remove: "Remove",
-    help_fill_only_fields: "Fill only fields you want to update. Blank fields keep existing values.",
-    placeholder_keep_existing: "leave blank to keep existing",
-    save_bulk_update: "Save Bulk Update",
-
-    // Harvest Management
-    harvest_title: "Harvest Management",
-    harvest_settings: "Harvest Settings",
-    close_harvest_settings: "Close Harvest Settings",
-    harvest_log_setup: "Harvest Log Sheet Setup",
-    harvest_settings_saved: "Harvest settings saved.",
-    err_missing_proxy_setup: "Missing Proxy URL. Go to Setup first.",
-    err_harvest_link_invalid: "Harvest Sheet link invalid (cannot find spreadsheet ID).",
+    err_harvest_link_invalid: "Harvest Sheet link invalid.",
     err_harvest_tab_required: "Harvest tab name is required.",
-    err_failed_save_harvest_settings: "Failed to save Harvest settings.",
-    save_harvest_setup: "Save Harvest Setup",
-    help_ready_click_start: "Ready. Click Start Scanning to scan another QR.",
-    start_scanning: "Start Scanning",
-    help_complete_harvest_setup_first: "Please complete Harvest Log setup above first.",
-    scan_item_qr_key_column: "Scan Item QR (Key Column:",
-    status_loading_item_log: "Loading item + log row…",
-    err_failed_load_item_harvest: "Failed to load item.",
-    status_item_loaded_log_exists: "Item loaded (log record exists).",
-    status_item_loaded_no_log: "Item loaded (no log record yet).",
-    status_scan_label_must_match: "Scan label QR (must match item).",
-    status_matched: "Matched.",
-    err_save_harvest_first: "Save Harvest first to create a log record.",
-    btn_harvest: "Harvest",
-    btn_harvest_form: "Harvest Form",
-    btn_wood_processing: "Wood Processing",
-    scanned_key: "Scanned Key",
-    item_details: "Item details",
-    verify_harvest_label: "Scan Harvest Label QR (must match item:",
-    verify_processing_label: "Scan Processing Label QR (must match item:",
-    harvest_form_title: "Harvest Form",
-    wood_processing_form_title: "Wood Processing Form",
-    label_item: "Item",
-    harvest_date: "Harvest Date",
-    number_of_shoots: "Number of Shoots",
-    shoot1_length: "Shoot 1 length",
-    shoot2_length: "Shoot 2 length",
-    processing_date: "Processing Date",
-    xlarge_label: "#X-Large (>1 cm)",
-    large_label: "#Large (>8 mm)",
-    medium_label: "#Medium",
-    small_label: "#Small",
-    or_label: "#OR",
-    status_saving_harvest_log: "Saving harvest log…",
-    status_saving_processing: "Saving processing…",
-    msg_saved_ready_next: "Saved. Ready to scan next item.",
-    msg_harvest_saved_ready: "Harvest saved. Ready to scan next item.",
-    msg_processing_saved_ready: "Processing saved. Ready to scan next item.",
-    err_failed_save_harvest: "Failed to save harvest.",
-    err_failed_save_processing: "Failed to save processing.",
-    btn_save_processing: "Save Processing",
-    btn_stop: "Stop",
+    err_key_required: "Key Column is required. Click Load Columns first.",
+    msg_columns_loaded: "Columns loaded. Please choose Key Column.",
+    msg_cleared: "Cleared saved settings.",
 
-    // Harvest Capture
-    err_scan_item_first: "Please scan an item first.",
-    btn_take_picture: "Take Picture",
-    btn_starting: "Starting...",
-    btn_capture: "Capture",
-    btn_done: "Done",
-    btn_clear_photos_item: "Clear Photos for This Item",
-    label_photos: "Photos",
-    err_camera_not_ready: "Camera not ready yet. Wait 1 second and try again.",
-    err_canvas: "Cannot capture image (canvas error).",
-    err_start_camera: "Cannot start camera.",
+    // Language
+    setup_language_title: "Language",
+    setup_language_label: "Choose language",
+    lang_en: "English",
+    lang_vi: "Vietnamese",
+    lang_es: "Spanish",
 
-    // Export ZIP
-    choose_export_folder: "Choose Export Folder (pick Downloads for USB)",
-    export_folder_label: "Export folder:",
-    export_zip: "Export Harvest Photos (ZIP)",
-    exporting: "Exporting…",
-    err_no_photos: "No harvest photos found on this device.",
-    status_exported_ok: "Exported ZIP successfully.",
-    status_creating_zip: "Creating ZIP…",
-    status_saving_zip: "Saving ZIP to selected folder…",
-    err_no_export_folder:
-      "No export folder selected. Tap “Choose Export Folder” first and pick Downloads.",
-    err_export_failed: "Export failed.",
-    err_choose_folder_failed: "Failed to choose folder.",
-    msg_export_folder_set: "Export folder set to:",
-    saved_uri: "Saved URI:",
-    usb_copy_hint:
-      "USB copy: connect phone → open the folder you selected (Downloads/Documents) → HarvestExports → copy the ZIP.",
-    confirm_delete_title: "Delete photos now?",
-    confirm_delete_body_1: "Export completed successfully.",
-    confirm_delete_body_2: "Do you want to delete all stored harvest photos from this device?",
-    no_keep_for_later: "No, keep for later",
-    yes_delete: "Yes, delete",
-    status_deleted: "Exported ZIP successfully. Photos deleted from this device.",
-    status_kept: "Exported ZIP successfully. Photos kept on this device.",
-
-    // Generic
-    please_go_setup_first: "Please go to Setup first.",
-
-    //Alert
+    // Harvest / Alerts
     qr_not_match_scan_another: "QR not match, please scan another",
-
   },
 
   vi: {
+    // App / Tabs
     app_title: "Ứng dụng QR Sheets",
-    login: "Đăng nhập",
-    logout: "Đăng xuất",
-    please_login: "Vui lòng đăng nhập để sử dụng ứng dụng.",
-
-    tab_items: "Quản lý vật tư",
+    tab_items: "Quản lý cây",
     tab_harvest: "Quản lý thu hoạch",
-    tab_storage: "Kho thùng",
     tab_setup: "Cài đặt",
 
-    language: "Ngôn ngữ",
-    english: "Tiếng Anh",
-    vietnamese: "Tiếng Việt",
-    spanish: "Tiếng Tây Ban Nha",
-    save: "Lưu",
-    saving: "Đang lưu…",
-    close: "Đóng",
-    back: "Quay lại",
-    cancel: "Hủy",
-    stop: "Dừng",
-    done: "Xong",
-    edit: "Chỉnh sửa",
-    cancel_edit: "Hủy chỉnh sửa",
+    // Setup
+    setup_title: "Cài đặt",
+    setup_proxy_title: "1) Proxy URL",
+    setup_proxy_label: "Cloudflare Worker URL",
+    setup_items_title: "2) Bảng Items (942 - Vine Master Inventory)",
+    setup_sheet_link: "Link Google Sheet",
+    setup_tab_name: "Tên tab",
+    setup_load_columns: "Tải cột",
+    setup_loading: "Đang tải...",
+    setup_key_column: "Cột khóa (QR chứa giá trị này)",
+    setup_harvest_title: "3) Bảng Harvest Log (2026 Harvesting Log)",
+    setup_save: "Lưu cài đặt",
+    setup_clear: "Xóa cài đặt đã lưu",
 
-    setup: "Cài đặt",
-    proxy_url: "Proxy URL",
-    cloudflare_worker_url: "URL Cloudflare Worker",
-    items_sheet_title: "Sheet danh mục (942 - Vine Master Inventory)",
-    google_sheet_link: "Link Google Sheet",
-    tab_name: "Tên tab",
-    load_columns: "Tải cột",
-    loading: "Đang tải…",
-    key_column_help: "Cột khóa (QR chứa giá trị này)",
-    harvest_setup_moved:
-      "Thiết lập Harvest Log đã chuyển sang tab Harvest (chỉ cần nếu bạn dùng Harvest).",
-    save_setup: "Lưu cài đặt",
-    clear_saved_setup: "Xóa cài đặt đã lưu",
-    msg_cleared_settings: "Đã xóa cài đặt đã lưu.",
-    err_proxy_required_worker: "Bắt buộc có Proxy URL (Cloudflare Worker URL).",
-    err_items_link_invalid_id: "Link Items Sheet không hợp lệ (không tìm thấy spreadsheet ID).",
-    err_items_tab_required: "Bắt buộc nhập tên tab Items.",
-    msg_columns_loaded_choose_key: "Đã tải cột. Vui lòng chọn Cột khóa.",
-    err_proxy_required: "Bắt buộc có Proxy URL.",
-    err_items_link_invalid: "Link Items Sheet không hợp lệ.",
-    err_key_column_required: "Bắt buộc chọn Cột khóa. Hãy bấm “Tải cột” trước.",
+    // Setup messages/errors
+    err_proxy_required: "Cần Proxy URL (Cloudflare Worker URL).",
+    err_items_link_invalid: "Link Items Sheet không hợp lệ (không tìm thấy spreadsheet ID).",
+    err_items_tab_required: "Cần nhập tên tab Items.",
+    err_harvest_link_invalid: "Link Harvest Sheet không hợp lệ.",
+    err_harvest_tab_required: "Cần nhập tên tab Harvest.",
+    err_key_required: "Cần chọn Key Column. Hãy bấm “Tải cột” trước.",
+    msg_columns_loaded: "Đã tải danh sách cột. Vui lòng chọn Key Column.",
+    msg_cleared: "Đã xóa cài đặt đã lưu.",
 
-    items_title: "Quản lý vật tư",
-    scan: "Quét",
-    bulk_scan: "Quét hàng loạt",
+    // Language
+    setup_language_title: "Ngôn ngữ",
+    setup_language_label: "Chọn ngôn ngữ",
+    lang_en: "Tiếng Anh",
+    lang_vi: "Tiếng Việt",
+    lang_es: "Tiếng Tây Ban Nha",
 
-    status_loading_item: "Đang tải thông tin…",
-    status_item_loaded: "Đã tải thông tin.",
-    err_item_not_found_in: "Không tìm thấy trong",
-    err_failed_load_item: "Tải thông tin thất bại.",
-    status_saving: "Đang lưu…",
-    err_save_failed: "Lưu thất bại.",
-    status_saved_updated_fields: "Đã lưu. Số trường cập nhật:",
-    scan_another: "Quét mã khác",
-    label_scan_key_column: "Quét QR theo Cột khóa",
-    label_items_tab: "Tab Items",
-    label_key: "Mã",
-    label_item_details: "Chi tiết",
-    help_edit_except_key: "Chỉnh sửa tất cả cột trừ Cột khóa",
-
-    status_loading_columns: "Đang tải cột…",
-    status_columns_loaded: "Đã tải cột.",
-    err_failed_load_columns: "Tải cột thất bại.",
-    err_no_scanned_keys: "Chưa có mã nào được quét.",
-    err_no_fields_entered: "Chưa nhập trường nào. Hãy nhập ít nhất 1 trường để cập nhật.",
-    status_bulk_updated: "Đã cập nhật:",
-    status_not_found: "Không tìm thấy:",
-    err_bulk_update_failed: "Cập nhật hàng loạt thất bại.",
-    help_scan_many_keys: "Quét nhiều mã QR. Số mã đã quét:",
-    clear_scans: "Xóa danh sách quét",
-    msg_cleared_scanned_keys: "Đã xóa các mã đã quét.",
-    copy_all: "Sao chép tất cả",
-    msg_copied_clipboard: "Đã sao chép vào clipboard.",
-    err_copy_failed: "Sao chép thất bại (không dùng được clipboard).",
-    scanned_items: "Danh sách đã quét",
-    remove: "Xóa",
-    help_fill_only_fields:
-      "Chỉ điền các trường bạn muốn cập nhật. Trường để trống sẽ giữ giá trị hiện có.",
-    placeholder_keep_existing: "để trống để giữ nguyên",
-    save_bulk_update: "Lưu cập nhật hàng loạt",
-
-    harvest_title: "Quản lý thu hoạch",
-    harvest_settings: "Thiết lập Harvest",
-    close_harvest_settings: "Đóng thiết lập Harvest",
-    harvest_log_setup: "Thiết lập Harvest Log Sheet",
-    harvest_settings_saved: "Đã lưu thiết lập Harvest.",
-    err_missing_proxy_setup: "Thiếu Proxy URL. Vui lòng vào Cài đặt trước.",
-    err_harvest_link_invalid: "Link Harvest Sheet không hợp lệ (không tìm thấy spreadsheet ID).",
-    err_harvest_tab_required: "Bắt buộc nhập tên tab Harvest.",
-    err_failed_save_harvest_settings: "Lưu thiết lập Harvest thất bại.",
-    save_harvest_setup: "Lưu thiết lập Harvest",
-    help_ready_click_start: "Sẵn sàng. Bấm Bắt đầu quét để quét mã tiếp theo.",
-    start_scanning: "Bắt đầu quét",
-    help_complete_harvest_setup_first: "Vui lòng hoàn tất thiết lập Harvest Log bên trên trước.",
-    scan_item_qr_key_column: "Quét QR vật tư (Cột khóa:",
-    status_loading_item_log: "Đang tải vật tư + dòng log…",
-    err_failed_load_item_harvest: "Tải vật tư thất bại.",
-    status_item_loaded_log_exists: "Đã tải (đã có log).",
-    status_item_loaded_no_log: "Đã tải (chưa có log).",
-    status_scan_label_must_match: "Quét QR nhãn (phải trùng với vật tư).",
-    status_matched: "Trùng khớp.",
-    err_save_harvest_first: "Hãy lưu Harvest trước để tạo log.",
-    btn_harvest: "Harvest",
-    btn_harvest_form: "Form Harvest",
-    btn_wood_processing: "Xử lý gỗ",
-    scanned_key: "Mã đã quét",
-    item_details: "Chi tiết vật tư",
-    verify_harvest_label: "Quét QR nhãn Harvest (phải trùng với:",
-    verify_processing_label: "Quét QR nhãn Xử lý (phải trùng với:",
-    harvest_form_title: "Form Harvest",
-    wood_processing_form_title: "Form Xử lý gỗ",
-    label_item: "Vật tư",
-    harvest_date: "Ngày thu hoạch",
-    number_of_shoots: "Số chồi",
-    shoot1_length: "Chiều dài chồi 1",
-    shoot2_length: "Chiều dài chồi 2",
-    processing_date: "Ngày xử lý",
-    xlarge_label: "#Rất lớn (>1 cm)",
-    large_label: "#Lớn (>8 mm)",
-    medium_label: "#Vừa",
-    small_label: "#Nhỏ",
-    or_label: "#OR",
-    status_saving_harvest_log: "Đang lưu log Harvest…",
-    status_saving_processing: "Đang lưu xử lý…",
-    msg_saved_ready_next: "Đã lưu. Sẵn sàng quét mã tiếp theo.",
-    msg_harvest_saved_ready: "Đã lưu Harvest. Sẵn sàng quét mã tiếp theo.",
-    msg_processing_saved_ready: "Đã lưu xử lý. Sẵn sàng quét mã tiếp theo.",
-    err_failed_save_harvest: "Lưu Harvest thất bại.",
-    err_failed_save_processing: "Lưu xử lý thất bại.",
-    btn_save_processing: "Lưu xử lý",
-    btn_stop: "Dừng",
-
-    err_scan_item_first: "Vui lòng quét vật tư trước.",
-    btn_take_picture: "Chụp ảnh",
-    btn_starting: "Đang mở…",
-    btn_capture: "Chụp",
-    btn_done: "Xong",
-    btn_clear_photos_item: "Xóa ảnh của vật tư này",
-    label_photos: "Ảnh",
-    err_camera_not_ready: "Camera chưa sẵn sàng. Đợi 1 giây rồi thử lại.",
-    err_canvas: "Không thể chụp ảnh (lỗi canvas).",
-    err_start_camera: "Không thể mở camera.",
-
-    choose_export_folder: "Chọn thư mục xuất (chọn Downloads để copy USB)",
-    export_folder_label: "Thư mục xuất:",
-    export_zip: "Xuất ảnh thu hoạch (ZIP)",
-    exporting: "Đang xuất…",
-    err_no_photos: "Không có ảnh thu hoạch trên thiết bị này.",
-    status_exported_ok: "Xuất ZIP thành công.",
-    status_creating_zip: "Đang tạo ZIP…",
-    status_saving_zip: "Đang lưu ZIP vào thư mục đã chọn…",
-    err_no_export_folder:
-      "Chưa chọn thư mục xuất. Hãy bấm “Chọn thư mục xuất” và chọn Downloads.",
-    err_export_failed: "Xuất thất bại.",
-    err_choose_folder_failed: "Chọn thư mục thất bại.",
-    msg_export_folder_set: "Đã chọn thư mục xuất:",
-    saved_uri: "Đường dẫn (URI):",
-    usb_copy_hint:
-      "Copy USB: cắm điện thoại → mở thư mục đã chọn (Downloads/Documents) → HarvestExports → copy file ZIP.",
-    confirm_delete_title: "Xóa ảnh ngay bây giờ?",
-    confirm_delete_body_1: "Xuất ZIP thành công.",
-    confirm_delete_body_2: "Bạn có muốn xóa toàn bộ ảnh thu hoạch đã lưu trên thiết bị không?",
-    no_keep_for_later: "Không, để lại cho lần sau",
-    yes_delete: "Có, xóa",
-    status_deleted: "Xuất ZIP thành công. Đã xóa ảnh trên thiết bị.",
-    status_kept: "Xuất ZIP thành công. Đã giữ ảnh trên thiết bị.",
-
-    please_go_setup_first: "Vui lòng vào Cài đặt trước.",
-
+    // Harvest / Alerts
     qr_not_match_scan_another: "QR không khớp, vui lòng quét lại mã khác",
-
   },
 
   es: {
+    // App / Tabs
     app_title: "Aplicación QR Sheets",
-    login: "Iniciar sesión",
-    logout: "Cerrar sesión",
-    please_login: "Inicia sesión para usar esta aplicación.",
-
-    tab_items: "Gestión de artículos",
+    tab_items: "Gestión de ítems",
     tab_harvest: "Gestión de cosecha",
-    tab_storage: "Almacén de contenedores",
     tab_setup: "Configuración",
 
-    language: "Idioma",
-    english: "Inglés",
-    vietnamese: "Vietnamita",
-    spanish: "Español",
-    save: "Guardar",
-    saving: "Guardando…",
-    close: "Cerrar",
-    back: "Atrás",
-    cancel: "Cancelar",
-    stop: "Detener",
-    done: "Listo",
-    edit: "Editar",
-    cancel_edit: "Cancelar edición",
+    // Setup
+    setup_title: "Configuración",
+    setup_proxy_title: "1) URL del Proxy",
+    setup_proxy_label: "URL de Cloudflare Worker",
+    setup_items_title: "2) Hoja de ítems (942 - Vine Master Inventory)",
+    setup_sheet_link: "Enlace de Google Sheet",
+    setup_tab_name: "Nombre de la pestaña",
+    setup_load_columns: "Cargar columnas",
+    setup_loading: "Cargando...",
+    setup_key_column: "Columna clave (el QR contiene este valor)",
+    setup_harvest_title: "3) Hoja de Harvest Log (2026 Harvesting Log)",
+    setup_save: "Guardar configuración",
+    setup_clear: "Borrar configuración guardada",
 
-    setup: "Configuración",
-    proxy_url: "URL del Proxy",
-    cloudflare_worker_url: "URL de Cloudflare Worker",
-    items_sheet_title: "Hoja de artículos (942 - Vine Master Inventory)",
-    google_sheet_link: "Enlace de Google Sheet",
-    tab_name: "Nombre de pestaña",
-    load_columns: "Cargar columnas",
-    loading: "Cargando…",
-    key_column_help: "Columna clave (el QR contiene este valor)",
-    harvest_setup_moved:
-      "La configuración de Harvest Log está dentro de la pestaña Harvest (solo si usas Harvest).",
-    save_setup: "Guardar configuración",
-    clear_saved_setup: "Borrar configuración guardada",
-    msg_cleared_settings: "Configuración guardada eliminada.",
-    err_proxy_required_worker: "Se requiere URL del Proxy (Cloudflare Worker).",
-    err_items_link_invalid_id: "Enlace de Items inválido (no se encontró el ID).",
-    err_items_tab_required: "Se requiere el nombre de pestaña de Items.",
-    msg_columns_loaded_choose_key: "Columnas cargadas. Elige la Columna clave.",
-    err_proxy_required: "Se requiere URL del Proxy.",
-    err_items_link_invalid: "Enlace de Items inválido.",
-    err_key_column_required: "Se requiere Columna clave. Pulsa “Cargar columnas” primero.",
+    // Setup messages/errors
+    err_proxy_required: "Se requiere la URL del Proxy (Cloudflare Worker URL).",
+    err_items_link_invalid: "Enlace de Items Sheet inválido (no se encontró el ID).",
+    err_items_tab_required: "Se requiere el nombre de la pestaña de ítems.",
+    err_harvest_link_invalid: "Enlace de Harvest Sheet inválido.",
+    err_harvest_tab_required: "Se requiere el nombre de la pestaña de cosecha.",
+    err_key_required: "Se requiere la columna clave. Haz clic en “Cargar columnas” primero.",
+    msg_columns_loaded: "Columnas cargadas. Por favor elige la columna clave.",
+    msg_cleared: "Configuración guardada borrada.",
 
-    items_title: "Gestión de artículos",
-    scan: "Escanear",
-    bulk_scan: "Escaneo masivo",
+    // Language
+    setup_language_title: "Idioma",
+    setup_language_label: "Elegir idioma",
+    lang_en: "Inglés",
+    lang_vi: "Vietnamita",
+    lang_es: "Español",
 
-    status_loading_item: "Cargando artículo…",
-    status_item_loaded: "Artículo cargado.",
-    err_item_not_found_in: "Artículo no encontrado en",
-    err_failed_load_item: "Error al cargar el artículo.",
-    status_saving: "Guardando…",
-    err_save_failed: "Error al guardar.",
-    status_saved_updated_fields: "Guardado. Campos actualizados:",
-    scan_another: "Escanear otro",
-    label_scan_key_column: "Escanea el QR de tu Columna clave",
-    label_items_tab: "Pestaña de Items",
-    label_key: "Clave",
-    label_item_details: "Detalles del artículo",
-    help_edit_except_key: "Edita todas las columnas excepto la clave",
-
-    status_loading_columns: "Cargando columnas…",
-    status_columns_loaded: "Columnas cargadas.",
-    err_failed_load_columns: "Error al cargar columnas.",
-    err_no_scanned_keys: "Aún no hay claves escaneadas.",
-    err_no_fields_entered: "No se ingresaron campos. Rellena al menos 1 campo para actualizar.",
-    status_bulk_updated: "Actualizado masivo:",
-    status_not_found: "No encontrado:",
-    err_bulk_update_failed: "Error en actualización masiva.",
-    help_scan_many_keys: "Escanea muchos QR. Claves escaneadas:",
-    clear_scans: "Borrar escaneos",
-    msg_cleared_scanned_keys: "Escaneos borrados.",
-    copy_all: "Copiar todo",
-    msg_copied_clipboard: "Copiado al portapapeles.",
-    err_copy_failed: "No se pudo copiar (portapapeles no disponible).",
-    scanned_items: "Elementos escaneados",
-    remove: "Quitar",
-    help_fill_only_fields:
-      "Rellena solo los campos que quieras actualizar. Los campos en blanco mantienen el valor.",
-    placeholder_keep_existing: "dejar en blanco para mantener",
-    save_bulk_update: "Guardar actualización masiva",
-
-    harvest_title: "Gestión de cosecha",
-    harvest_settings: "Ajustes de cosecha",
-    close_harvest_settings: "Cerrar ajustes de cosecha",
-    harvest_log_setup: "Configuración de hoja Harvest Log",
-    harvest_settings_saved: "Ajustes de cosecha guardados.",
-    err_missing_proxy_setup: "Falta el URL del Proxy. Ve a Configuración primero.",
-    err_harvest_link_invalid: "Enlace de Harvest inválido (no se encontró el ID).",
-    err_harvest_tab_required: "Se requiere el nombre de pestaña de Harvest.",
-    err_failed_save_harvest_settings: "Error al guardar ajustes de cosecha.",
-    save_harvest_setup: "Guardar ajustes de cosecha",
-    help_ready_click_start: "Listo. Pulsa Iniciar escaneo para escanear otro QR.",
-    start_scanning: "Iniciar escaneo",
-    help_complete_harvest_setup_first: "Completa primero la configuración de Harvest Log.",
-    scan_item_qr_key_column: "Escanear QR del artículo (Columna clave:",
-    status_loading_item_log: "Cargando artículo + fila de log…",
-    err_failed_load_item_harvest: "Error al cargar el artículo.",
-    status_item_loaded_log_exists: "Artículo cargado (existe registro).",
-    status_item_loaded_no_log: "Artículo cargado (sin registro).",
-    status_scan_label_must_match: "Escanea el QR de etiqueta (debe coincidir).",
-    status_matched: "Coincide.",
-    err_save_harvest_first: "Guarda Harvest primero para crear el registro.",
-    btn_harvest: "Harvest",
-    btn_harvest_form: "Formulario Harvest",
-    btn_wood_processing: "Procesamiento de madera",
-    scanned_key: "Clave escaneada",
-    item_details: "Detalles",
-    verify_harvest_label: "Escanea etiqueta Harvest (debe coincidir con:",
-    verify_processing_label: "Escanea etiqueta de procesamiento (debe coincidir con:",
-    harvest_form_title: "Formulario Harvest",
-    wood_processing_form_title: "Formulario de procesamiento",
-    label_item: "Artículo",
-    harvest_date: "Fecha de cosecha",
-    number_of_shoots: "Número de brotes",
-    shoot1_length: "Longitud brote 1",
-    shoot2_length: "Longitud brote 2",
-    processing_date: "Fecha de procesamiento",
-    xlarge_label: "#Extra grande (>1 cm)",
-    large_label: "#Grande (>8 mm)",
-    medium_label: "#Mediano",
-    small_label: "#Pequeño",
-    or_label: "#OR",
-    status_saving_harvest_log: "Guardando log de cosecha…",
-    status_saving_processing: "Guardando procesamiento…",
-    msg_saved_ready_next: "Guardado. Listo para el siguiente escaneo.",
-    msg_harvest_saved_ready: "Harvest guardado. Listo para el siguiente escaneo.",
-    msg_processing_saved_ready: "Procesamiento guardado. Listo para el siguiente escaneo.",
-    err_failed_save_harvest: "Error al guardar Harvest.",
-    err_failed_save_processing: "Error al guardar procesamiento.",
-    btn_save_processing: "Guardar procesamiento",
-    btn_stop: "Detener",
-
-    err_scan_item_first: "Primero escanea un artículo.",
-    btn_take_picture: "Tomar foto",
-    btn_starting: "Iniciando…",
-    btn_capture: "Capturar",
-    btn_done: "Listo",
-    btn_clear_photos_item: "Borrar fotos de este artículo",
-    label_photos: "Fotos",
-    err_camera_not_ready: "La cámara no está lista. Espera 1 segundo e inténtalo de nuevo.",
-    err_canvas: "No se puede capturar la imagen (error de canvas).",
-    err_start_camera: "No se puede iniciar la cámara.",
-
-    choose_export_folder: "Elegir carpeta de exportación (Downloads para USB)",
-    export_folder_label: "Carpeta de exportación:",
-    export_zip: "Exportar fotos de cosecha (ZIP)",
-    exporting: "Exportando…",
-    err_no_photos: "No hay fotos de cosecha en este dispositivo.",
-    status_exported_ok: "ZIP exportado correctamente.",
-    status_creating_zip: "Creando ZIP…",
-    status_saving_zip: "Guardando ZIP en la carpeta seleccionada…",
-    err_no_export_folder:
-      "No hay carpeta de exportación seleccionada. Pulsa “Elegir carpeta” y selecciona Downloads.",
-    err_export_failed: "Error al exportar.",
-    err_choose_folder_failed: "Error al elegir carpeta.",
-    msg_export_folder_set: "Carpeta de exportación establecida en:",
-    saved_uri: "URI guardado:",
-    usb_copy_hint:
-      "Copia USB: conecta el teléfono → abre la carpeta elegida (Downloads/Documents) → HarvestExports → copia el ZIP.",
-    confirm_delete_title: "¿Borrar fotos ahora?",
-    confirm_delete_body_1: "Exportación completada correctamente.",
-    confirm_delete_body_2: "¿Quieres borrar todas las fotos de cosecha almacenadas en este dispositivo?",
-    no_keep_for_later: "No, guardar para después",
-    yes_delete: "Sí, borrar",
-    status_deleted: "ZIP exportado correctamente. Fotos borradas del dispositivo.",
-    status_kept: "ZIP exportado correctamente. Fotos conservadas en el dispositivo.",
-
-    please_go_setup_first: "Ve a Configuración primero.",
-
+    // Harvest / Alerts
     qr_not_match_scan_another: "El QR no coincide, por favor escanea otro",
-
   },
 };
 
-function normalizeLang(lang) {
-  const s = String(lang || "").toLowerCase().trim();
-  if (s.startsWith("vi")) return "vi";
-  if (s.startsWith("es")) return "es";
+function safeLang(raw) {
+  const v = String(raw || "").toLowerCase().trim();
+  if (v === "vi" || v === "vietnamese") return "vi";
+  if (v === "es" || v === "spanish") return "es";
   return "en";
 }
 
-const I18nCtx = createContext({ lang: "en", t: (k) => k });
-
 export function I18nProvider({ children }) {
-  const [lang, setLang] = useState(() => normalizeLang(loadSettings()?.language || "en"));
+  const [lang, setLangState] = useState(() => safeLang(loadSettings()?.language || "en"));
 
+  // update when settings change (cross-page)
   useEffect(() => {
-    const off = onSettingsChange((s) => setLang(normalizeLang(s?.language || "en")));
-    return off;
+    return onSettingsChange((s) => {
+      const next = safeLang(s?.language || "en");
+      setLangState(next);
+    });
   }, []);
 
-  const value = useMemo(() => {
-    const L = lang;
-    const dictEn = DICT.en || {};
-    const dict = DICT[L] || {};
-    const t = (key) => dict[key] ?? dictEn[key] ?? key;
-    return { lang: L, t };
+  const setLang = (nextLang) => {
+    const fixed = safeLang(nextLang);
+    setLangState(fixed);
+    // persist immediately
+    saveSettings({ language: fixed });
+  };
+
+  const t = useMemo(() => {
+    const table = DICT[lang] || DICT.en;
+    return (key) => table[key] || DICT.en[key] || key;
   }, [lang]);
 
-  return <I18nCtx.Provider value={value}>{children}</I18nCtx.Provider>;
+  const value = useMemo(() => ({ lang, setLang, t }), [lang, t]);
+
+  // IMPORTANT: no JSX here (keeps .js valid everywhere)
+  return React.createElement(I18nCtx.Provider, { value }, children);
 }
 
-export function useT() {
+export function useI18n() {
   return useContext(I18nCtx);
 }
