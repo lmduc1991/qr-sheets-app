@@ -3,8 +3,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Html5QrcodeScanner } from "html5-qrcode";
 import { loadSettings } from "../store/settingsStore";
 import { getHeaders, bulkUpdate } from "../api/sheetsApi";
+import { useT } from "../i18n";
 
 export default function ItemBulkScanPage() {
+  const { t } = useT();
+
   const settings = useMemo(() => loadSettings(), []);
   const keyColumn = settings?.keyColumn || "";
 
@@ -49,8 +52,6 @@ export default function ItemBulkScanPage() {
       async (decodedText) => {
         const key = String(decodedText || "").trim();
         if (!key) return;
-
-        // IMPORTANT: fix invalid ".prev" syntax
         setKeys((prev) => Array.from(new Set([...prev.map(String), String(key)])));
       },
       () => {}
@@ -61,20 +62,20 @@ export default function ItemBulkScanPage() {
 
   const loadCols = async () => {
     setError("");
-    setStatus("Loading columns...");
+    setStatus(t("status_loading_columns"));
     try {
       const h = await getHeaders(settings.itemsSpreadsheetId, settings.itemsSheetName);
       setHeaders(h);
-      setStatus("Columns loaded.");
+      setStatus(t("status_columns_loaded"));
     } catch (e) {
       setStatus("");
-      setError(e.message || "Failed to load columns.");
+      setError(e.message || t("err_failed_load_columns"));
     }
   };
 
   const doBulkUpdate = async () => {
     setError("");
-    if (keys.length === 0) return setError("No scanned keys yet.");
+    if (keys.length === 0) return setError(t("err_no_scanned_keys"));
 
     const patch = {};
     Object.keys(form).forEach((k) => {
@@ -84,16 +85,16 @@ export default function ItemBulkScanPage() {
       patch[k] = v;
     });
 
-    if (Object.keys(patch).length === 0) return setError("No fields entered. Fill at least 1 field to update.");
+    if (Object.keys(patch).length === 0) return setError(t("err_no_fields_entered"));
 
     setIsSaving(true);
     try {
       const r = await bulkUpdate(keys, patch);
-      setStatus(`Bulk updated: ${r.updated || 0}. Not found: ${(r.notFound || []).length}`);
+      setStatus(`${t("status_bulk_updated")} ${r.updated || 0}. ${t("status_not_found")} ${(r.notFound || []).length}`);
       setEditing(false);
     } catch (e) {
       setStatus("");
-      setError(e.message || "Bulk update failed.");
+      setError(e.message || t("err_bulk_update_failed"));
     } finally {
       setIsSaving(false);
     }
@@ -108,34 +109,35 @@ export default function ItemBulkScanPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  if (!settings?.proxyUrl) return <div>Please go to Setup first.</div>;
+  if (!settings?.proxyUrl) return <div>{t("please_go_setup_first")}</div>;
 
   return (
     <div className="card">
-      <h3>Bulk Scan</h3>
+      <h3>{t("bulk_scan")}</h3>
 
       {status && <div className="alert">{status}</div>}
       {error && <div className="alert alert-error">{error}</div>}
 
       <p>
-        Scan many QR codes. Keys scanned: <strong>{keys.length}</strong>
+        {t("help_scan_many_keys")} <strong>{keys.length}</strong>
       </p>
 
       <div id="bulk-scan-reader" />
 
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
         <button className="primary" onClick={() => setEditing((v) => !v)} disabled={isSaving}>
-          {editing ? "Cancel Edit" : "Edit"}
+          {editing ? t("cancel_edit") : t("edit")}
         </button>
+
         <button
           onClick={() => {
             setKeys([]);
             setForm({});
-            setStatus("Cleared scanned keys.");
+            setStatus(t("msg_cleared_scanned_keys"));
           }}
           disabled={isSaving}
         >
-          Clear Scans
+          {t("clear_scans")}
         </button>
 
         {keys.length > 0 && (
@@ -143,22 +145,21 @@ export default function ItemBulkScanPage() {
             onClick={async () => {
               try {
                 await navigator.clipboard.writeText(keys.join("\n"));
-                setStatus("Copied scanned keys to clipboard.");
+                setStatus(t("msg_copied_clipboard"));
               } catch {
-                setError("Copy failed (clipboard not available).");
+                setError(t("err_copy_failed"));
               }
             }}
             disabled={isSaving}
           >
-            Copy All
+            {t("copy_all")}
           </button>
         )}
       </div>
 
-      {/* Always-visible scanned list */}
       {keys.length > 0 && (
         <div style={{ marginTop: 12 }}>
-          <div style={{ fontWeight: 800, marginBottom: 8 }}>Scanned Items</div>
+          <div style={{ fontWeight: 800, marginBottom: 8 }}>{t("scanned_items")}</div>
           <div
             style={{
               maxHeight: 220,
@@ -187,7 +188,7 @@ export default function ItemBulkScanPage() {
               >
                 <span style={{ fontWeight: 700 }}>{k}</span>
                 <button onClick={() => removeKey(k)} style={{ padding: "2px 8px" }} disabled={isSaving}>
-                  Remove
+                  {t("remove")}
                 </button>
               </div>
             ))}
@@ -197,7 +198,7 @@ export default function ItemBulkScanPage() {
 
       {editing && (
         <>
-          <p style={{ marginTop: 12 }}>Fill only fields you want to update. Blank fields keep existing values.</p>
+          <p style={{ marginTop: 12 }}>{t("help_fill_only_fields")}</p>
 
           <div className="grid">
             {headers
@@ -208,7 +209,7 @@ export default function ItemBulkScanPage() {
                   <input
                     value={form[h] ?? ""}
                     onChange={(e) => setForm((prev) => ({ ...prev, [h]: e.target.value }))}
-                    placeholder="leave blank to keep existing"
+                    placeholder={t("placeholder_keep_existing")}
                     disabled={isSaving}
                   />
                 </label>
@@ -216,7 +217,7 @@ export default function ItemBulkScanPage() {
           </div>
 
           <button className="primary" onClick={doBulkUpdate} disabled={isSaving}>
-            {isSaving ? "Saving..." : "Save Bulk Update"}
+            {isSaving ? t("saving") : t("save_bulk_update")}
           </button>
         </>
       )}
