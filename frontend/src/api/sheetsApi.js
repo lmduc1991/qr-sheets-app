@@ -1,6 +1,5 @@
 // frontend/src/api/sheetsApi.js
 import { loadSettings } from "../store/settingsStore";
-import netlifyIdentity from "netlify-identity-widget";
 
 const mem = {
   item: new Map(), // key -> { data, exp }
@@ -30,44 +29,48 @@ function invalidateKey(key) {
   mem.combo.delete(key);
 }
 
-/**
- * Returns Authorization header for Netlify Identity.
- * Uses user.jwt() (refresh-safe) rather than reading a potentially stale token.
- */
-async function getAuthHeader() {
-  const user = netlifyIdentity.currentUser();
-  if (!user) return {};
-  const jwt = await user.jwt();
-  return { Authorization: `Bearer ${jwt}` };
+async function parseJsonOrExplain(resp) {
+  const ct = (resp.headers.get("content-type") || "").toLowerCase();
+
+  // If an auth system or error page returns HTML, make it obvious.
+  if (ct.includes("text/html")) {
+    const text = await resp.text().catch(() => "");
+    // Keep message short but clear
+    throw new Error(
+      "Proxy returned HTML (not JSON). This usually means your Proxy URL is protected by Cloudflare Access or the URL is wrong. Disable Access for the Worker/proxy or use the correct Proxy URL."
+    );
+  }
+
+  // Try parse JSON; if not JSON, show a helpful error.
+  const text = await resp.text().catch(() => "");
+  try {
+    return text ? JSON.parse(text) : {};
+  } catch {
+    throw new Error(`Proxy returned non-JSON response (HTTP ${resp.status}). Check Proxy URL / Worker.`);
+  }
 }
 
 async function callApi(action, payload, { timeoutMs = 12000 } = {}) {
   const s = loadSettings();
   if (!s?.proxyUrl) throw new Error("Missing Proxy URL. Go to Setup and save settings first.");
 
-  const user = netlifyIdentity.currentUser();
-  if (!user) throw new Error("You are not logged in. Please login first.");
-
   const controller = new AbortController();
   const t = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const authHeader = await getAuthHeader();
-
     const resp = await fetch(s.proxyUrl, {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        ...authHeader,
       },
       body: JSON.stringify({ action, payload }),
       signal: controller.signal,
     });
 
-    const data = await resp.json().catch(() => ({}));
+    const data = await parseJsonOrExplain(resp);
 
     if (resp.status === 401 || resp.status === 403) {
-      throw new Error(data?.error || "Unauthorized. Please login again.");
+      throw new Error(data?.error || "Unauthorized. Check Cloudflare Access / permissions on Proxy.");
     }
 
     if (!resp.ok || data?.ok === false) {
@@ -165,7 +168,7 @@ export async function bulkUpdate(keys, patch) {
 function requireHarvestSettings() {
   const s = loadSettings();
   if (!s?.harvestSpreadsheetId || !s?.harvestSheetName) {
-    throw new Error("Harvest settings missing. Open Harvest tab and set Harvest sheet + tab first.");
+    throw new Error("Harvest settings missing. Open Setup and set Harvest sheet + tab first.");
   }
   return s;
 }
@@ -214,7 +217,7 @@ export async function getItemAndHarvestByKey(keyValue) {
     throw new Error("Items settings missing. Check Setup (Items sheet, tab, key column).");
   }
   if (!s?.harvestSpreadsheetId || !s?.harvestSheetName) {
-    throw new Error("Harvest settings missing. Open Harvest tab and set Harvest sheet + tab first.");
+    throw new Error("Harvest settings missing. Open Setup and set Harvest sheet + tab first.");
   }
 
   const data = await callApi(
@@ -268,13 +271,12 @@ export async function appendBinStorage({ binLabel, bagLabels }) {
 }
 
 /**
- * NEW: Load existing children for a parent label so frontend can block duplicates during scanning.
+ * Load existing children for a parent label so frontend can block duplicates during scanning.
  * mode="bag": parentLabel = bagLabel, returns vine IDs already in that bag (from Bag tab)
  * mode="bin": parentLabel = binLabel, returns bag labels already in that bin (from Bin tab)
  */
 export async function getExistingChildrenForParent({ mode, parentLabel }) {
   const s = requireStorageSettings();
-
   const sheetName = mode === "bag" ? s.bagStorageSheetName : s.binStorageSheetName;
 
   const r = await callApi("getExistingChildrenForParent", {
