@@ -1,14 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { Html5QrcodeScanner } from "html5-qrcode";
 import { loadSettings, saveSettings, onSettingsChange } from "../store/settingsStore";
-import {
-  getItemAndHarvestByKey,
-  appendHarvestLog,
-  updateHarvestLogByRow,
-} from "../api/sheetsApi";
+import { getItemAndHarvestByKey, appendHarvestLog, updateHarvestLogByRow } from "../api/sheetsApi";
 import { getPhotoCount } from "../store/harvestStore";
 import HarvestCapture from "../components/HarvestCapture";
 import ExportHarvestZipButton from "../components/ExportHarvestZipButton";
+import { useT } from "../i18n";
 
 function today() {
   const d = new Date();
@@ -61,6 +58,8 @@ function PrettyDetails({ item, preferredOrder = [] }) {
 }
 
 export default function HarvestManagementPage() {
+  const { t } = useT();
+
   // Reactive settings (no reload needed)
   const [settings, setSettings] = useState(() => loadSettings());
   useEffect(() => onSettingsChange(setSettings), []);
@@ -69,9 +68,7 @@ export default function HarvestManagementPage() {
 
   // Harvest sheet setup inside Harvest tab
   const [harvestUrl, setHarvestUrl] = useState(settings?.harvestUrl || "");
-  const [harvestSheetName, setHarvestSheetName] = useState(
-    settings?.harvestSheetName || "Harvesting Log"
-  );
+  const [harvestSheetName, setHarvestSheetName] = useState(settings?.harvestSheetName || "Harvesting Log");
   const [setupOpen, setSetupOpen] = useState(false);
   const [setupMsg, setSetupMsg] = useState("");
   const [setupErr, setSetupErr] = useState("");
@@ -89,9 +86,9 @@ export default function HarvestManagementPage() {
     setSetupErr("");
     setSetupMsg("");
 
-    if (!settings?.proxyUrl) return setSetupErr("Missing Proxy URL. Go to Setup first.");
-    if (!harvestSpreadsheetId) return setSetupErr("Harvest Sheet link invalid (cannot find spreadsheet ID).");
-    if (!String(harvestSheetName || "").trim()) return setSetupErr("Harvest tab name is required.");
+    if (!settings?.proxyUrl) return setSetupErr(t("err_missing_proxy_setup"));
+    if (!harvestSpreadsheetId) return setSetupErr(t("err_harvest_link_invalid"));
+    if (!String(harvestSheetName || "").trim()) return setSetupErr(t("err_harvest_tab_required"));
 
     setSetupSaving(true);
     try {
@@ -100,10 +97,10 @@ export default function HarvestManagementPage() {
         harvestSpreadsheetId,
         harvestSheetName: harvestSheetName.trim(),
       });
-      setSetupMsg("Harvest settings saved.");
+      setSetupMsg(t("harvest_settings_saved"));
       setSetupOpen(false);
     } catch (e) {
-      setSetupErr(e.message || "Failed to save Harvest settings.");
+      setSetupErr(e.message || t("err_failed_save_harvest_settings"));
     } finally {
       setSetupSaving(false);
     }
@@ -207,7 +204,6 @@ export default function HarvestManagementPage() {
   };
 
   const beginScanItem = async () => {
-    // Clear UI and go to scan mode, but do not auto-scan from other pages
     setStatus("");
     setError("");
     resetStateForNewScan();
@@ -217,7 +213,7 @@ export default function HarvestManagementPage() {
     setTimeout(() => {
       startScanner("harvest-item-reader", async (key) => {
         setError("");
-        setStatus("Loading item + log row…");
+        setStatus(t("status_loading_item_log"));
 
         try {
           const r = await getItemAndHarvestByKey(key);
@@ -226,7 +222,7 @@ export default function HarvestManagementPage() {
           setHeaders(ir?.headers || []);
           if (!ir?.found) {
             const tab = settings?.itemsSheetName ? `"${settings.itemsSheetName}"` : "Items tab";
-            throw new Error(`Item not found in ${tab}.`);
+            throw new Error(`${t("err_item_not_found_in")} ${tab}.`);
           }
 
           setItemKey(key);
@@ -255,17 +251,17 @@ export default function HarvestManagementPage() {
             });
             setProcessingFormMode("view");
 
-            setStatus("Item loaded (log record exists).");
+            setStatus(t("status_item_loaded_log_exists"));
           } else {
             setHarvestExists(false);
             setHarvestFormMode("create");
-            setStatus("Item loaded (no log record yet).");
+            setStatus(t("status_item_loaded_no_log"));
           }
 
           setStep("viewItem");
         } catch (e) {
           setStatus("");
-          setError(e.message || "Failed to load item.");
+          setError(e.message || t("err_failed_load_item_harvest"));
           setStep("scanItem");
         }
       });
@@ -274,14 +270,14 @@ export default function HarvestManagementPage() {
 
   const verifyLabel = async (domId, nextStep) => {
     setError("");
-    setStatus("Scan label QR (must match item).");
+    setStatus(t("status_scan_label_must_match"));
     await stopScanner();
 
     setTimeout(() => {
       startScanner(domId, async (scanned) => {
         if (scanned === itemKey) {
           setError("");
-          setStatus("Matched.");
+          setStatus(t("status_matched"));
           setStep(nextStep);
           return;
         }
@@ -303,18 +299,18 @@ export default function HarvestManagementPage() {
     await verifyLabel("processing-label-reader", "processingForm");
   };
 
-  // IMPORTANT CHANGE: after save, return to idle + clear item (no QR info shown)
+  // after save, return to idle + clear item
   const returnToIdleReady = async (successMsg) => {
     await stopScanner();
     resetStateForNewScan();
     setStep("idle");
     setError("");
-    setStatus(successMsg || "Saved. Ready to scan next item.");
+    setStatus(successMsg || t("msg_saved_ready_next"));
   };
 
   const saveHarvest = async () => {
     setError("");
-    setStatus("Saving harvest log…");
+    setStatus(t("status_saving_harvest_log"));
     setIsSaving(true);
 
     try {
@@ -341,10 +337,10 @@ export default function HarvestManagementPage() {
         });
       }
 
-      await returnToIdleReady("Harvest saved. Ready to scan next item.");
+      await returnToIdleReady(t("msg_harvest_saved_ready"));
     } catch (e) {
       setStatus("");
-      setError(e.message || "Failed to save harvest.");
+      setError(e.message || t("err_failed_save_harvest"));
     } finally {
       setIsSaving(false);
     }
@@ -352,12 +348,12 @@ export default function HarvestManagementPage() {
 
   const saveProcessing = async () => {
     setError("");
-    setStatus("Saving processing…");
+    setStatus(t("status_saving_processing"));
     setIsSaving(true);
 
     try {
       if (!harvestExists || harvestRow == null) {
-        throw new Error("No log record exists yet. Save Harvest first.");
+        throw new Error(t("err_save_harvest_first"));
       }
 
       await updateHarvestLogByRow({
@@ -372,20 +368,20 @@ export default function HarvestManagementPage() {
         orCount: processingForm.orCount,
       });
 
-      await returnToIdleReady("Processing saved. Ready to scan next item.");
+      await returnToIdleReady(t("msg_processing_saved_ready"));
     } catch (e) {
       setStatus("");
-      setError(e.message || "Failed to save processing.");
+      setError(e.message || t("err_failed_save_processing"));
     } finally {
       setIsSaving(false);
     }
   };
 
-  if (!settings?.proxyUrl) return <div className="page">Please go to Setup first.</div>;
+  if (!settings?.proxyUrl) return <div className="page">{t("please_go_setup_first")}</div>;
 
   return (
     <div className="page">
-      <h2>Harvest Management</h2>
+      <h2>{t("harvest_title")}</h2>
 
       <div className="card" style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
         <ExportHarvestZipButton />
@@ -396,18 +392,18 @@ export default function HarvestManagementPage() {
             setSetupMsg("");
           }}
         >
-          {setupOpen ? "Close Harvest Settings" : "Harvest Settings"}
+          {setupOpen ? t("close_harvest_settings") : t("harvest_settings")}
         </button>
       </div>
 
       {(setupOpen || !harvestReady) && (
         <div className="card" style={{ marginTop: 10 }}>
-          <h3>Harvest Log Sheet Setup</h3>
+          <h3>{t("harvest_log_setup")}</h3>
           {setupErr && <div className="alert alert-error">{setupErr}</div>}
           {setupMsg && <div className="alert alert-ok">{setupMsg}</div>}
 
           <label className="field">
-            Google Sheet link
+            {t("google_sheet_link")}
             <input
               value={harvestUrl}
               onChange={(e) => setHarvestUrl(e.target.value)}
@@ -416,12 +412,12 @@ export default function HarvestManagementPage() {
           </label>
 
           <label className="field">
-            Tab name
+            {t("tab_name")}
             <input value={harvestSheetName} onChange={(e) => setHarvestSheetName(e.target.value)} />
           </label>
 
           <button className="primary" onClick={saveHarvestSetup} disabled={setupSaving}>
-            {setupSaving ? "Saving..." : "Save Harvest Setup"}
+            {setupSaving ? t("saving") : t("save_harvest_setup")}
           </button>
         </div>
       )}
@@ -435,13 +431,13 @@ export default function HarvestManagementPage() {
 
       {step === "idle" && (
         <div className="card">
-          <p>Ready. Click Start Scanning to scan another QR.</p>
+          <p>{t("help_ready_click_start")}</p>
           <button className="primary" onClick={beginScanItem} disabled={!harvestReady}>
-            Start Scanning
+            {t("start_scanning")}
           </button>
           {!harvestReady && (
             <div style={{ marginTop: 10, fontSize: 13, opacity: 0.8 }}>
-              Please complete Harvest Log setup above first.
+              {t("help_complete_harvest_setup_first")}
             </div>
           )}
         </div>
@@ -450,7 +446,7 @@ export default function HarvestManagementPage() {
       {step === "scanItem" && (
         <div className="card">
           <p>
-            Scan Item QR (Key Column: <strong>{keyColumn}</strong>)
+            {t("scan_item_qr_key_column")} <strong>{keyColumn}</strong>)
           </p>
           <div id="harvest-item-reader" />
           <button
@@ -463,7 +459,7 @@ export default function HarvestManagementPage() {
               resetStateForNewScan();
             }}
           >
-            Stop
+            {t("btn_stop")}
           </button>
         </div>
       )}
@@ -471,7 +467,7 @@ export default function HarvestManagementPage() {
       {step === "viewItem" && (
         <div className="card">
           <div>
-            <strong>Scanned Key:</strong> {itemKey}
+            <strong>{t("scanned_key")}:</strong> {itemKey}
           </div>
 
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
@@ -481,7 +477,7 @@ export default function HarvestManagementPage() {
               disabled={harvestExists}
               style={harvestExists ? { opacity: 0.4, cursor: "not-allowed" } : undefined}
             >
-              Harvest
+              {t("btn_harvest")}
             </button>
 
             <button
@@ -492,31 +488,28 @@ export default function HarvestManagementPage() {
               disabled={!harvestExists}
               style={!harvestExists ? { opacity: 0.4, cursor: "not-allowed" } : undefined}
             >
-              Harvest Form
+              {t("btn_harvest_form")}
             </button>
 
             <button
               onClick={beginVerifyProcessing}
               disabled={!harvestExists}
-              style={
-                !harvestExists
-                  ? { opacity: 0.4, cursor: "not-allowed", filter: "blur(0.4px)" }
-                  : undefined
-              }
-              title={!harvestExists ? "Save Harvest first to create a log record." : "Scan processing label to continue."}
+              style={!harvestExists ? { opacity: 0.4, cursor: "not-allowed", filter: "blur(0.4px)" } : undefined}
+              title={!harvestExists ? t("err_save_harvest_first") : t("status_scan_label_must_match")}
             >
-              Wood Processing
+              {t("btn_wood_processing")}
             </button>
 
-            <button onClick={async () => {
-              // Return to idle; user can click Start Scanning again
-              await returnToIdleReady("Ready to scan next item.");
-            }}>
-              Done
+            <button
+              onClick={async () => {
+                await returnToIdleReady(t("msg_saved_ready_next"));
+              }}
+            >
+              {t("done")}
             </button>
           </div>
 
-          <h3 style={{ marginTop: 14 }}>Item details</h3>
+          <h3 style={{ marginTop: 14 }}>{t("item_details")}</h3>
           <PrettyDetails item={item} preferredOrder={headers} />
         </div>
       )}
@@ -524,25 +517,25 @@ export default function HarvestManagementPage() {
       {step === "verifyHarvest" && (
         <div className="card">
           <p>
-            Scan Harvest Label QR (must match item: <strong>{itemKey}</strong>).
+            {t("verify_harvest_label")} <strong>{itemKey}</strong>).
           </p>
           <div id="harvest-label-reader" />
           <button style={{ marginTop: 10 }} onClick={() => setStep("viewItem")}>
-            Cancel
+            {t("cancel")}
           </button>
         </div>
       )}
 
       {step === "harvestForm" && (
         <div className="card">
-          <h3>Harvest Form</h3>
+          <h3>{t("harvest_form_title")}</h3>
           <div style={{ marginBottom: 10 }}>
-            <strong>Item:</strong> {itemKey}
+            <strong>{t("label_item")}:</strong> {itemKey}
           </div>
 
           <div className="grid">
             <label className="field">
-              Harvest Date
+              {t("harvest_date")}
               <input
                 type="date"
                 value={harvestForm.harvestingDate}
@@ -552,7 +545,7 @@ export default function HarvestManagementPage() {
             </label>
 
             <label className="field">
-              Number of Shoots
+              {t("number_of_shoots")}
               <input
                 value={harvestForm.numberOfShoot}
                 onChange={(e) => setHarvestForm((p) => ({ ...p, numberOfShoot: e.target.value }))}
@@ -561,7 +554,7 @@ export default function HarvestManagementPage() {
             </label>
 
             <label className="field">
-              Shoot 1 length
+              {t("shoot1_length")}
               <input
                 value={harvestForm.shoot1Length}
                 onChange={(e) => setHarvestForm((p) => ({ ...p, shoot1Length: e.target.value }))}
@@ -570,7 +563,7 @@ export default function HarvestManagementPage() {
             </label>
 
             <label className="field">
-              Shoot 2 length
+              {t("shoot2_length")}
               <input
                 value={harvestForm.shoot2Length}
                 onChange={(e) => setHarvestForm((p) => ({ ...p, shoot2Length: e.target.value }))}
@@ -586,11 +579,11 @@ export default function HarvestManagementPage() {
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
             {harvestFormMode === "view" ? (
               <button className="primary" onClick={() => setHarvestFormMode("edit")}>
-                Edit
+                {t("edit")}
               </button>
             ) : (
               <button className="primary" onClick={saveHarvest} disabled={isSaving}>
-                {isSaving ? "Saving…" : "Save"}
+                {isSaving ? t("saving") : t("save")}
               </button>
             )}
 
@@ -603,7 +596,7 @@ export default function HarvestManagementPage() {
               }}
               disabled={isSaving}
             >
-              Back
+              {t("back")}
             </button>
           </div>
         </div>
@@ -612,25 +605,25 @@ export default function HarvestManagementPage() {
       {step === "verifyProcessing" && (
         <div className="card">
           <p>
-            Scan Processing Label QR (must match item: <strong>{itemKey}</strong>).
+            {t("verify_processing_label")} <strong>{itemKey}</strong>).
           </p>
           <div id="processing-label-reader" />
           <button style={{ marginTop: 10 }} onClick={() => setStep("viewItem")}>
-            Cancel
+            {t("cancel")}
           </button>
         </div>
       )}
 
       {step === "processingForm" && (
         <div className="card">
-          <h3>Wood Processing Form</h3>
+          <h3>{t("wood_processing_form_title")}</h3>
           <div style={{ marginBottom: 10 }}>
-            <strong>Item:</strong> {itemKey}
+            <strong>{t("label_item")}:</strong> {itemKey}
           </div>
 
           <div className="grid">
             <label className="field">
-              Processing Date
+              {t("processing_date")}
               <input
                 type="date"
                 value={processingForm.processingDate}
@@ -640,7 +633,7 @@ export default function HarvestManagementPage() {
             </label>
 
             <label className="field">
-              #X-Large (&gt;1 cm)
+              {t("xlarge_label")}
               <input
                 value={processingForm.xLarge}
                 onChange={(e) => setProcessingForm((p) => ({ ...p, xLarge: e.target.value }))}
@@ -649,7 +642,7 @@ export default function HarvestManagementPage() {
             </label>
 
             <label className="field">
-              #Large (&gt;8 mm)
+              {t("large_label")}
               <input
                 value={processingForm.large}
                 onChange={(e) => setProcessingForm((p) => ({ ...p, large: e.target.value }))}
@@ -658,7 +651,7 @@ export default function HarvestManagementPage() {
             </label>
 
             <label className="field">
-              #Medium
+              {t("medium_label")}
               <input
                 value={processingForm.medium}
                 onChange={(e) => setProcessingForm((p) => ({ ...p, medium: e.target.value }))}
@@ -667,7 +660,7 @@ export default function HarvestManagementPage() {
             </label>
 
             <label className="field">
-              #Small
+              {t("small_label")}
               <input
                 value={processingForm.small}
                 onChange={(e) => setProcessingForm((p) => ({ ...p, small: e.target.value }))}
@@ -676,7 +669,7 @@ export default function HarvestManagementPage() {
             </label>
 
             <label className="field">
-              #OR
+              {t("or_label")}
               <input
                 value={processingForm.orCount}
                 onChange={(e) => setProcessingForm((p) => ({ ...p, orCount: e.target.value }))}
@@ -688,11 +681,11 @@ export default function HarvestManagementPage() {
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
             {processingFormMode === "view" ? (
               <button className="primary" onClick={() => setProcessingFormMode("edit")}>
-                Edit
+                {t("edit")}
               </button>
             ) : (
               <button className="primary" onClick={saveProcessing} disabled={isSaving}>
-                {isSaving ? "Saving…" : "Save Processing"}
+                {isSaving ? t("saving") : t("btn_save_processing")}
               </button>
             )}
 
@@ -705,7 +698,7 @@ export default function HarvestManagementPage() {
               }}
               disabled={isSaving}
             >
-              Back
+              {t("back")}
             </button>
           </div>
         </div>
