@@ -1,19 +1,22 @@
 import { NavLink, Routes, Route, Navigate } from "react-router-dom";
 import ItemScanPage from "./ItemScanPage";
 import ItemBulkScanPage from "./ItemBulkScanPage";
+import { useT } from "../i18n";
 
 export default function ItemsManagementPage() {
+  const { t } = useT();
+
   return (
     <div className="page">
-      <h2>Item Management</h2>
+      <h2>{t("items_title")}</h2>
 
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
         <NavLink to="/items/scan" style={{ textDecoration: "none" }}>
-          {({ isActive }) => <button className={isActive ? "primary" : ""}>Scan</button>}
+          {({ isActive }) => <button className={isActive ? "primary" : ""}>{t("scan")}</button>}
         </NavLink>
 
         <NavLink to="/items/bulk" style={{ textDecoration: "none" }}>
-          {({ isActive }) => <button className={isActive ? "primary" : ""}>Bulk Scan</button>}
+          {({ isActive }) => <button className={isActive ? "primary" : ""}>{t("bulk_scan")}</button>}
         </NavLink>
       </div>
 
