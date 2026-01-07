@@ -1,8 +1,11 @@
 // src/components/HarvestCapture.jsx
 import { useEffect, useRef, useState } from "react";
 import { addPhoto, getPhotos, clearPhotos } from "../store/harvestStore";
+import { useT } from "../i18n";
 
 export default function HarvestCapture({ itemId }) {
+  const { t } = useT();
+
   const [photos, setPhotos] = useState([]);
   const [cameraOn, setCameraOn] = useState(false);
   const [camError, setCamError] = useState("");
@@ -25,7 +28,7 @@ export default function HarvestCapture({ itemId }) {
 
   const stopCamera = () => {
     const s = streamRef.current;
-    if (s) s.getTracks().forEach((t) => t.stop());
+    if (s) s.getTracks().forEach((trk) => trk.stop());
     streamRef.current = null;
 
     const v = videoRef.current;
@@ -40,7 +43,6 @@ export default function HarvestCapture({ itemId }) {
     setIsStarting(true);
 
     try {
-      // Ensure we stop any old stream first
       stopCamera();
 
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -54,10 +56,7 @@ export default function HarvestCapture({ itemId }) {
 
       streamRef.current = stream;
 
-      // Turn UI on FIRST so the <video> is guaranteed to be mounted
       setCameraOn(true);
-
-      // Wait one tick for React to render the video element
       await new Promise((r) => setTimeout(r, 0));
 
       const v = videoRef.current;
@@ -68,7 +67,6 @@ export default function HarvestCapture({ itemId }) {
       v.muted = true;
       v.autoplay = true;
 
-      // Wait metadata so videoWidth/videoHeight become available
       await new Promise((resolve) => {
         const handler = () => {
           v.removeEventListener("loadedmetadata", handler);
@@ -77,13 +75,12 @@ export default function HarvestCapture({ itemId }) {
         v.addEventListener("loadedmetadata", handler);
       });
 
-      // Some Android devices need a direct play() after metadata
       await v.play();
 
       setIsStarting(false);
     } catch (e) {
       setIsStarting(false);
-      setCamError(e?.message || "Cannot start camera.");
+      setCamError(e?.message || t("err_start_camera"));
       stopCamera();
     }
   };
@@ -94,13 +91,11 @@ export default function HarvestCapture({ itemId }) {
     const v = videoRef.current;
     if (!v) return;
 
-    // If camera is still warming up, avoid black frame
     if (!v.videoWidth || !v.videoHeight) {
-      setCamError("Camera not ready yet. Wait 1 second and try again.");
+      setCamError(t("err_camera_not_ready"));
       return;
     }
 
-    // Wait one frame so we capture a painted frame
     await new Promise((r) => requestAnimationFrame(r));
 
     const w = v.videoWidth;
@@ -112,7 +107,7 @@ export default function HarvestCapture({ itemId }) {
 
     const ctx = canvas.getContext("2d");
     if (!ctx) {
-      setCamError("Cannot capture image (canvas error).");
+      setCamError(t("err_canvas"));
       return;
     }
 
@@ -123,7 +118,7 @@ export default function HarvestCapture({ itemId }) {
     setPhotos(getPhotos(itemId));
   };
 
-  if (!itemId) return <div>Please scan an item first.</div>;
+  if (!itemId) return <div>{t("err_scan_item_first")}</div>;
 
   return (
     <div>
@@ -132,14 +127,14 @@ export default function HarvestCapture({ itemId }) {
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
         {!cameraOn ? (
           <button className="primary" onClick={startCamera} disabled={isStarting}>
-            {isStarting ? "Starting..." : "Take Picture"}
+            {isStarting ? t("btn_starting") : t("btn_take_picture")}
           </button>
         ) : (
           <>
             <button className="primary" onClick={capture}>
-              Capture
+              {t("btn_capture")}
             </button>
-            <button onClick={stopCamera}>Done</button>
+            <button onClick={stopCamera}>{t("btn_done")}</button>
           </>
         )}
 
@@ -149,15 +144,14 @@ export default function HarvestCapture({ itemId }) {
             setPhotos([]);
           }}
         >
-          Clear Photos for This Item
+          {t("btn_clear_photos_item")}
         </button>
 
         <div>
-          <strong>Photos:</strong> {photos.length}
+          <strong>{t("label_photos")}:</strong> {photos.length}
         </div>
       </div>
 
-      {/* Always mounted video (critical fix). Just hide when camera off */}
       <div style={{ marginTop: 10, display: cameraOn ? "block" : "none" }}>
         <video
           ref={videoRef}
