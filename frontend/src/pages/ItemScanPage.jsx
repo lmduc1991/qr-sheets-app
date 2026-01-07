@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { Html5QrcodeScanner } from "html5-qrcode";
 import { loadSettings, onSettingsChange } from "../store/settingsStore";
 import { getItemByKey, updateItemByKey } from "../api/sheetsApi";
+import { useT } from "../i18n";
 
 function PrettyDetails({ item, preferredOrder = [] }) {
   if (!item) return null;
@@ -42,6 +43,8 @@ function PrettyDetails({ item, preferredOrder = [] }) {
 }
 
 export default function ItemScanPage() {
+  const { t } = useT();
+
   // Settings can change after Setup (new sheet/tab/key column). Subscribe so Scan page updates immediately.
   const [settings, setSettings] = useState(() => loadSettings());
   useEffect(() => onSettingsChange(setSettings), []);
@@ -100,7 +103,7 @@ export default function ItemScanPage() {
   };
 
   const loadItem = async (key) => {
-    setStatus("Loading item...");
+    setStatus(t("status_loading_item"));
     setError("");
     setEditing(false);
     setItem(null);
@@ -112,21 +115,21 @@ export default function ItemScanPage() {
       setHeaders(r.headers || []);
       if (!r.found) {
         setStatus("");
-        setError(`Item not found in ${itemsSheetName || "Items sheet"}.`);
+        setError(`${t("err_item_not_found_in")} ${itemsSheetName || "Items sheet"}.`);
         return;
       }
       setItem(r.item);
       setForm(r.item);
-      setStatus("Item loaded.");
+      setStatus(t("status_item_loaded"));
     } catch (e) {
       setStatus("");
-      setError(e.message || "Failed to load item.");
+      setError(e.message || t("err_failed_load_item"));
     }
   };
 
   const save = async () => {
     setError("");
-    setStatus("Saving...");
+    setStatus(t("status_saving"));
     try {
       // patch excludes Key column
       const patch = {};
@@ -137,12 +140,12 @@ export default function ItemScanPage() {
       });
 
       const r = await updateItemByKey(scannedKey, patch);
-      setStatus(`Saved. Updated fields: ${r.updated ?? 0}`);
+      setStatus(`${t("status_saved_updated_fields")} ${r.updated ?? 0}`);
       setEditing(false);
       setItem((prev) => ({ ...(prev || {}), ...patch }));
     } catch (e) {
       setStatus("");
-      setError(e.message || "Save failed.");
+      setError(e.message || t("err_save_failed"));
     }
   };
 
@@ -166,11 +169,11 @@ export default function ItemScanPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  if (!settings?.proxyUrl) return <div>Please go to Setup first.</div>;
+  if (!settings?.proxyUrl) return <div>{t("please_go_setup_first")}</div>;
 
   return (
     <div className="card">
-      <h3>Scan</h3>
+      <h3>{t("scan")}</h3>
 
       {status && <div className="alert">{status}</div>}
       {error && <div className="alert alert-error">{error}</div>}
@@ -178,11 +181,11 @@ export default function ItemScanPage() {
       {!item && (
         <>
           <p>
-            Scan QR from your Key Column: <strong>{keyColumn}</strong>
+            {t("label_scan_key_column")}: <strong>{keyColumn}</strong>
             {itemsSheetName ? (
               <>
                 {" "}
-                (Items tab: <strong>{itemsSheetName}</strong>)
+                ({t("label_items_tab")}: <strong>{itemsSheetName}</strong>)
               </>
             ) : null}
           </p>
@@ -194,40 +197,39 @@ export default function ItemScanPage() {
         <>
           <div style={{ marginBottom: 10 }}>
             <div>
-              <strong>Key:</strong> {scannedKey}
+              <strong>{t("label_key")}:</strong> {scannedKey}
             </div>
 
             <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
               <button className="primary" onClick={() => setEditing((v) => !v)}>
-                {editing ? "Cancel Edit" : "Edit"}
+                {editing ? t("cancel_edit") : t("edit")}
               </button>
-              <button onClick={scanAnother}>Scan Another</button>
+              <button onClick={scanAnother}>{t("scan_another")}</button>
             </div>
           </div>
 
           {editing ? (
             <>
-              <p>Edit all columns except Key ID ({keyColumn}).</p>
+              <p>
+                {t("help_edit_except_key")} ({keyColumn}).
+              </p>
               <div className="grid">
                 {headers
                   .filter((h) => h && h !== keyColumn)
                   .map((h) => (
                     <label key={h} className="field">
                       {h}
-                      <input
-                        value={form[h] ?? ""}
-                        onChange={(e) => setForm((prev) => ({ ...prev, [h]: e.target.value }))}
-                      />
+                      <input value={form[h] ?? ""} onChange={(e) => setForm((prev) => ({ ...prev, [h]: e.target.value }))} />
                     </label>
                   ))}
               </div>
               <button className="primary" onClick={save}>
-                Save
+                {t("save")}
               </button>
             </>
           ) : (
             <div style={{ marginTop: 10 }}>
-              <h4 style={{ margin: "0 0 10px 0" }}>Item details</h4>
+              <h4 style={{ margin: "0 0 10px 0" }}>{t("label_item_details")}</h4>
               <PrettyDetails item={item} preferredOrder={headers} />
             </div>
           )}
