@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { loadSettings, saveSettings, clearSettings } from "../store/settingsStore";
 import { getHeaders } from "../api/sheetsApi";
-import { useT } from "../i18n";
+import { useI18n } from "../i18n";
 
 function extractSpreadsheetId(url) {
   const m = String(url || "").match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
@@ -10,11 +10,9 @@ function extractSpreadsheetId(url) {
 }
 
 export default function SetupPage() {
-  const { t } = useT();
   const nav = useNavigate();
   const existing = useMemo(() => loadSettings(), []);
-
-  const [language, setLanguage] = useState(existing?.language || "en");
+  const { lang, setLang, t } = useI18n();
 
   const [proxyUrl, setProxyUrl] = useState(existing?.proxyUrl || "");
 
@@ -24,24 +22,22 @@ export default function SetupPage() {
   const [headers, setHeaders] = useState([]);
   const [keyColumn, setKeyColumn] = useState(existing?.keyColumn || "");
 
+  const [harvestUrl, setHarvestUrl] = useState(existing?.harvestUrl || "");
+  const [harvestSheetName, setHarvestSheetName] = useState(existing?.harvestSheetName || "Harvesting Log");
+
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState("");
   const [error, setError] = useState("");
 
   const itemsSpreadsheetId = extractSpreadsheetId(itemsUrl);
-
-  const onChangeLanguage = (val) => {
-    setLanguage(val);
-    // Save immediately so the whole app switches language right away
-    saveSettings({ language: val });
-  };
+  const harvestSpreadsheetId = extractSpreadsheetId(harvestUrl);
 
   const loadColumns = async () => {
     setError("");
     setMsg("");
 
-    if (!proxyUrl.trim()) return setError(t("err_proxy_required_worker"));
-    if (!itemsSpreadsheetId) return setError(t("err_items_link_invalid_id"));
+    if (!proxyUrl.trim()) return setError(t("err_proxy_required"));
+    if (!itemsSpreadsheetId) return setError(t("err_items_link_invalid"));
     if (!itemsSheetName.trim()) return setError(t("err_items_tab_required"));
 
     // Save proxy so API calls work
@@ -52,9 +48,9 @@ export default function SetupPage() {
       const h = await getHeaders(itemsSpreadsheetId, itemsSheetName.trim());
       setHeaders(h);
       if (!keyColumn && h.length) setKeyColumn(h[0]);
-      setMsg(t("msg_columns_loaded_choose_key"));
+      setMsg(t("msg_columns_loaded"));
     } catch (e) {
-      setError(e.message || t("err_failed_load_columns"));
+      setError(e.message || "Failed to load columns.");
     } finally {
       setLoading(false);
     }
@@ -66,11 +62,13 @@ export default function SetupPage() {
 
     if (!proxyUrl.trim()) return setError(t("err_proxy_required"));
     if (!itemsSpreadsheetId) return setError(t("err_items_link_invalid"));
+    if (!harvestSpreadsheetId) return setError(t("err_harvest_link_invalid"));
     if (!itemsSheetName.trim()) return setError(t("err_items_tab_required"));
-    if (!keyColumn.trim()) return setError(t("err_key_column_required"));
+    if (!harvestSheetName.trim()) return setError(t("err_harvest_tab_required"));
+    if (!keyColumn.trim()) return setError(t("err_key_required"));
 
     saveSettings({
-      language,
+      language: lang,
 
       proxyUrl: proxyUrl.trim(),
 
@@ -78,48 +76,51 @@ export default function SetupPage() {
       itemsSpreadsheetId,
       itemsSheetName: itemsSheetName.trim(),
       keyColumn: keyColumn.trim(),
+
+      harvestUrl,
+      harvestSpreadsheetId,
+      harvestSheetName: harvestSheetName.trim(),
     });
 
-    // Move user into the app immediately
     nav("/items", { replace: true });
   };
 
   const doClear = () => {
     clearSettings();
-    setLanguage("en");
     setProxyUrl("");
     setItemsUrl("");
     setItemsSheetName("MASTER LIST");
     setHeaders([]);
     setKeyColumn("");
-    setMsg(t("msg_cleared_settings"));
+    setHarvestUrl("");
+    setHarvestSheetName("Harvesting Log");
+    setMsg(t("msg_cleared"));
     setError("");
   };
 
   return (
     <div className="page" style={{ maxWidth: 780 }}>
-      <h2>{t("setup")}</h2>
+      <h2>{t("setup_title")}</h2>
 
       {error && <div className="alert alert-error">{error}</div>}
       {msg && <div className="alert alert-ok">{msg}</div>}
 
-      {/* Language */}
       <div className="card">
-        <h3>{t("language")}</h3>
+        <h3>{t("setup_language_title")}</h3>
         <label className="field">
-          {t("language")}
-          <select value={language} onChange={(e) => onChangeLanguage(e.target.value)}>
-            <option value="en">{t("english")}</option>
-            <option value="vi">{t("vietnamese")}</option>
-            <option value="es">{t("spanish")}</option>
+          {t("setup_language_label")}
+          <select value={lang} onChange={(e) => setLang(e.target.value)}>
+            <option value="en">{t("lang_en")}</option>
+            <option value="vi">{t("lang_vi")}</option>
+            <option value="es">{t("lang_es")}</option>
           </select>
         </label>
       </div>
 
       <div className="card">
-        <h3>1) {t("proxy_url")}</h3>
+        <h3>{t("setup_proxy_title")}</h3>
         <label className="field">
-          {t("cloudflare_worker_url")}
+          {t("setup_proxy_label")}
           <input
             value={proxyUrl}
             onChange={(e) => setProxyUrl(e.target.value)}
@@ -129,9 +130,9 @@ export default function SetupPage() {
       </div>
 
       <div className="card">
-        <h3>2) {t("items_sheet_title")}</h3>
+        <h3>{t("setup_items_title")}</h3>
         <label className="field">
-          {t("google_sheet_link")}
+          {t("setup_sheet_link")}
           <input
             value={itemsUrl}
             onChange={(e) => setItemsUrl(e.target.value)}
@@ -139,17 +140,17 @@ export default function SetupPage() {
           />
         </label>
         <label className="field">
-          {t("tab_name")}
+          {t("setup_tab_name")}
           <input value={itemsSheetName} onChange={(e) => setItemsSheetName(e.target.value)} />
         </label>
 
         <button onClick={loadColumns} disabled={loading}>
-          {loading ? t("loading") : t("load_columns")}
+          {loading ? t("setup_loading") : t("setup_load_columns")}
         </button>
 
         {headers.length > 0 && (
           <label className="field" style={{ marginTop: 10 }}>
-            {t("key_column_help")}
+            {t("setup_key_column")}
             <select value={keyColumn} onChange={(e) => setKeyColumn(e.target.value)}>
               {headers.map((h) => (
                 <option key={h} value={h}>
@@ -162,14 +163,26 @@ export default function SetupPage() {
       </div>
 
       <div className="card">
-        <div style={{ fontSize: 13, opacity: 0.8 }}>{t("harvest_setup_moved")}</div>
+        <h3>{t("setup_harvest_title")}</h3>
+        <label className="field">
+          {t("setup_sheet_link")}
+          <input
+            value={harvestUrl}
+            onChange={(e) => setHarvestUrl(e.target.value)}
+            placeholder="https://docs.google.com/spreadsheets/d/..."
+          />
+        </label>
+        <label className="field">
+          {t("setup_tab_name")}
+          <input value={harvestSheetName} onChange={(e) => setHarvestSheetName(e.target.value)} />
+        </label>
       </div>
 
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
         <button onClick={saveAll} className="primary">
-          {t("save_setup")}
+          {t("setup_save")}
         </button>
-        <button onClick={doClear}>{t("clear_saved_setup")}</button>
+        <button onClick={doClear}>{t("setup_clear")}</button>
       </div>
     </div>
   );
