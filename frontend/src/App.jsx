@@ -26,9 +26,11 @@ export default function App() {
           <NavLink className={({ isActive }) => "tab" + (isActive ? " tab-active" : "")} to="/items">
             {t("tab_items")}
           </NavLink>
+
           <NavLink className={({ isActive }) => "tab" + (isActive ? " tab-active" : "")} to="/harvest">
             {t("tab_harvest")}
           </NavLink>
+
           <NavLink className={({ isActive }) => "tab" + (isActive ? " tab-active" : "")} to="/setup">
             {t("tab_setup")}
           </NavLink>
@@ -39,8 +41,10 @@ export default function App() {
         <Routes>
           <Route path="/" element={<Navigate to={hasSetup ? "/items" : "/setup"} replace />} />
           <Route path="/setup" element={<SetupPage />} />
+
           <Route path="/items/*" element={hasSetup ? <ItemsManagementPage /> : <Navigate to="/setup" replace />} />
           <Route path="/harvest" element={hasSetup ? <HarvestManagementPage /> : <Navigate to="/setup" replace />} />
+
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>
