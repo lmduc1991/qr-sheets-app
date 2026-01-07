@@ -180,3 +180,7 @@ export function I18nProvider({ children }) {
 export function useI18n() {
   return useContext(I18nCtx);
 }
+// Backward-compatible helper: some pages import useT()
+export function useT() {
+  return useI18n().t;
+}
