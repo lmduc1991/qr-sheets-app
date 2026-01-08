@@ -4,7 +4,8 @@ import ItemBulkScanPage from "./ItemBulkScanPage";
 import { useT } from "../i18n";
 
 export default function ItemsManagementPage() {
-  const { t } = useT();
+  // useT() returns the translation function directly
+  const t = useT();
 
   return (
     <div className="page">
