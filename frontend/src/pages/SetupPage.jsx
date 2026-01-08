@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { loadSettings, saveSettings, clearSettings } from "../store/settingsStore";
-import { getHeaders, getSheetTabs } from "../api/sheetsApi";
+import { getHeaders } from "../api/sheetsApi";
 
 function extractSpreadsheetId(url) {
   const m = String(url || "").match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
@@ -23,44 +23,12 @@ export default function SetupPage() {
   const [harvestUrl, setHarvestUrl] = useState(existing?.harvestUrl || "");
   const [harvestSheetName, setHarvestSheetName] = useState(existing?.harvestSheetName || "Harvesting Log");
 
-  // Packing / Unpacking (optional)
-  const [packingUrl, setPackingUrl] = useState(existing?.packingUrl || "");
-  const [packingOrSheetName, setPackingOrSheetName] = useState(existing?.packingOrSheetName || "");
-  const [packingGraftingSheetName, setPackingGraftingSheetName] = useState(
-    existing?.packingGraftingSheetName || ""
-  );
-  const [packingTabs, setPackingTabs] = useState([]);
-
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState("");
   const [error, setError] = useState("");
 
   const itemsSpreadsheetId = extractSpreadsheetId(itemsUrl);
   const harvestSpreadsheetId = extractSpreadsheetId(harvestUrl);
-  const packingSpreadsheetId = extractSpreadsheetId(packingUrl);
-
-  const loadPackingTabs = async () => {
-    setError("");
-    setMsg("");
-
-    if (!proxyUrl.trim()) return setError("Proxy URL is required (Cloudflare Worker URL).");
-    if (!packingSpreadsheetId)
-      return setError("Packing Sheet link invalid (cannot find spreadsheet ID).");
-
-    // Save proxy so API calls work
-    saveSettings({ proxyUrl: proxyUrl.trim() });
-
-    setLoading(true);
-    try {
-      const tabs = await getSheetTabs(packingSpreadsheetId);
-      setPackingTabs(tabs);
-      setMsg("Packing/Unpacking tabs loaded. Please choose OR and/or GRAFTING tab.");
-    } catch (e) {
-      setError(e.message || "Failed to load packing tabs.");
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const loadColumns = async () => {
     setError("");
@@ -90,7 +58,6 @@ export default function SetupPage() {
     setError("");
     setMsg("");
 
-    // Required modules
     if (!proxyUrl.trim()) return setError("Proxy URL is required.");
     if (!itemsSpreadsheetId) return setError("Items Sheet link invalid.");
     if (!harvestSpreadsheetId) return setError("Harvest Sheet link invalid.");
@@ -109,25 +76,9 @@ export default function SetupPage() {
       harvestUrl,
       harvestSpreadsheetId,
       harvestSheetName: harvestSheetName.trim(),
-
-      // Optional Packing/Unpacking (1 spreadsheet, 2 optional tabs)
-      ...(packingSpreadsheetId
-        ? {
-            packingUrl,
-            packingSpreadsheetId,
-            packingOrSheetName: packingOrSheetName.trim(),
-            packingGraftingSheetName: packingGraftingSheetName.trim(),
-          }
-        : {
-            packingUrl: "",
-            packingSpreadsheetId: "",
-            packingOrSheetName: "",
-            packingGraftingSheetName: "",
-          }),
     };
 
     saveSettings(next);
-
     nav("/items", { replace: true });
   };
 
@@ -140,11 +91,6 @@ export default function SetupPage() {
     setKeyColumn("");
     setHarvestUrl("");
     setHarvestSheetName("Harvesting Log");
-
-    setPackingUrl("");
-    setPackingOrSheetName("");
-    setPackingGraftingSheetName("");
-    setPackingTabs([]);
 
     setMsg("Cleared saved settings.");
     setError("");
@@ -216,72 +162,6 @@ export default function SetupPage() {
           Tab name
           <input value={harvestSheetName} onChange={(e) => setHarvestSheetName(e.target.value)} />
         </label>
-      </div>
-
-      <div className="card">
-        <h3>4) Packing / Unpacking Sheet (optional)</h3>
-
-        <label className="field">
-          Google Sheet link
-          <input
-            value={packingUrl}
-            onChange={(e) => setPackingUrl(e.target.value)}
-            placeholder="https://docs.google.com/spreadsheets/d/..."
-          />
-        </label>
-
-        <button onClick={loadPackingTabs} disabled={loading || !packingSpreadsheetId}>
-          {loading ? "Loading..." : "Load Tabs"}
-        </button>
-
-        <div style={{ display: "grid", gap: 10, marginTop: 10 }}>
-          <label className="field">
-            OR tab (used for OR-Packing / OR-Unpacking)
-            {packingTabs.length ? (
-              <select value={packingOrSheetName} onChange={(e) => setPackingOrSheetName(e.target.value)}>
-                <option value="">(not set)</option>
-                {packingTabs.map((t) => (
-                  <option key={t} value={t}>
-                    {t}
-                  </option>
-                ))}
-              </select>
-            ) : (
-              <input
-                value={packingOrSheetName}
-                onChange={(e) => setPackingOrSheetName(e.target.value)}
-                placeholder="Example: OR"
-              />
-            )}
-          </label>
-
-          <label className="field">
-            GRAFTING tab (used for Grafting-Packing / Grafting-Unpacking)
-            {packingTabs.length ? (
-              <select
-                value={packingGraftingSheetName}
-                onChange={(e) => setPackingGraftingSheetName(e.target.value)}
-              >
-                <option value="">(not set)</option>
-                {packingTabs.map((t) => (
-                  <option key={t} value={t}>
-                    {t}
-                  </option>
-                ))}
-              </select>
-            ) : (
-              <input
-                value={packingGraftingSheetName}
-                onChange={(e) => setPackingGraftingSheetName(e.target.value)}
-                placeholder="Example: GRAFTING"
-              />
-            )}
-          </label>
-        </div>
-
-        <div style={{ fontSize: 12, opacity: 0.85, marginTop: 8 }}>
-          You can leave either tab blank. If a tab is not set, the app will prompt you when you try to use that action.
-        </div>
       </div>
 
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
