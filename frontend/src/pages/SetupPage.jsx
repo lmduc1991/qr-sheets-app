@@ -1,8 +1,7 @@
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { loadSettings, saveSettings, clearSettings } from "../store/settingsStore";
-import { getHeaders } from "../api/sheetsApi";
-import { useI18n } from "../i18n";
+import { getHeaders, getSheetTabs } from "../api/sheetsApi";
 
 function extractSpreadsheetId(url) {
   const m = String(url || "").match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
@@ -12,7 +11,6 @@ function extractSpreadsheetId(url) {
 export default function SetupPage() {
   const nav = useNavigate();
   const existing = useMemo(() => loadSettings(), []);
-  const { lang, setLang, t } = useI18n();
 
   const [proxyUrl, setProxyUrl] = useState(existing?.proxyUrl || "");
 
@@ -25,20 +23,52 @@ export default function SetupPage() {
   const [harvestUrl, setHarvestUrl] = useState(existing?.harvestUrl || "");
   const [harvestSheetName, setHarvestSheetName] = useState(existing?.harvestSheetName || "Harvesting Log");
 
+  // Packing / Unpacking (optional)
+  const [packingUrl, setPackingUrl] = useState(existing?.packingUrl || "");
+  const [packingOrSheetName, setPackingOrSheetName] = useState(existing?.packingOrSheetName || "");
+  const [packingGraftingSheetName, setPackingGraftingSheetName] = useState(
+    existing?.packingGraftingSheetName || ""
+  );
+  const [packingTabs, setPackingTabs] = useState([]);
+
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState("");
   const [error, setError] = useState("");
 
   const itemsSpreadsheetId = extractSpreadsheetId(itemsUrl);
   const harvestSpreadsheetId = extractSpreadsheetId(harvestUrl);
+  const packingSpreadsheetId = extractSpreadsheetId(packingUrl);
+
+  const loadPackingTabs = async () => {
+    setError("");
+    setMsg("");
+
+    if (!proxyUrl.trim()) return setError("Proxy URL is required (Cloudflare Worker URL).");
+    if (!packingSpreadsheetId)
+      return setError("Packing Sheet link invalid (cannot find spreadsheet ID).");
+
+    // Save proxy so API calls work
+    saveSettings({ proxyUrl: proxyUrl.trim() });
+
+    setLoading(true);
+    try {
+      const tabs = await getSheetTabs(packingSpreadsheetId);
+      setPackingTabs(tabs);
+      setMsg("Packing/Unpacking tabs loaded. Please choose OR and/or GRAFTING tab.");
+    } catch (e) {
+      setError(e.message || "Failed to load packing tabs.");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const loadColumns = async () => {
     setError("");
     setMsg("");
 
-    if (!proxyUrl.trim()) return setError(t("err_proxy_required"));
-    if (!itemsSpreadsheetId) return setError(t("err_items_link_invalid"));
-    if (!itemsSheetName.trim()) return setError(t("err_items_tab_required"));
+    if (!proxyUrl.trim()) return setError("Proxy URL is required (Cloudflare Worker URL).");
+    if (!itemsSpreadsheetId) return setError("Items Sheet link invalid (cannot find spreadsheet ID).");
+    if (!itemsSheetName.trim()) return setError("Items tab name is required.");
 
     // Save proxy so API calls work
     saveSettings({ proxyUrl: proxyUrl.trim() });
@@ -48,7 +78,7 @@ export default function SetupPage() {
       const h = await getHeaders(itemsSpreadsheetId, itemsSheetName.trim());
       setHeaders(h);
       if (!keyColumn && h.length) setKeyColumn(h[0]);
-      setMsg(t("msg_columns_loaded"));
+      setMsg("Columns loaded. Please choose Key Column.");
     } catch (e) {
       setError(e.message || "Failed to load columns.");
     } finally {
@@ -60,16 +90,15 @@ export default function SetupPage() {
     setError("");
     setMsg("");
 
-    if (!proxyUrl.trim()) return setError(t("err_proxy_required"));
-    if (!itemsSpreadsheetId) return setError(t("err_items_link_invalid"));
-    if (!harvestSpreadsheetId) return setError(t("err_harvest_link_invalid"));
-    if (!itemsSheetName.trim()) return setError(t("err_items_tab_required"));
-    if (!harvestSheetName.trim()) return setError(t("err_harvest_tab_required"));
-    if (!keyColumn.trim()) return setError(t("err_key_required"));
+    // Required modules
+    if (!proxyUrl.trim()) return setError("Proxy URL is required.");
+    if (!itemsSpreadsheetId) return setError("Items Sheet link invalid.");
+    if (!harvestSpreadsheetId) return setError("Harvest Sheet link invalid.");
+    if (!itemsSheetName.trim()) return setError("Items tab name is required.");
+    if (!harvestSheetName.trim()) return setError("Harvest tab name is required.");
+    if (!keyColumn.trim()) return setError("Key Column is required. Click Load Columns first.");
 
-    saveSettings({
-      language: lang,
-
+    const next = {
       proxyUrl: proxyUrl.trim(),
 
       itemsUrl,
@@ -80,7 +109,24 @@ export default function SetupPage() {
       harvestUrl,
       harvestSpreadsheetId,
       harvestSheetName: harvestSheetName.trim(),
-    });
+
+      // Optional Packing/Unpacking (1 spreadsheet, 2 optional tabs)
+      ...(packingSpreadsheetId
+        ? {
+            packingUrl,
+            packingSpreadsheetId,
+            packingOrSheetName: packingOrSheetName.trim(),
+            packingGraftingSheetName: packingGraftingSheetName.trim(),
+          }
+        : {
+            packingUrl: "",
+            packingSpreadsheetId: "",
+            packingOrSheetName: "",
+            packingGraftingSheetName: "",
+          }),
+    };
+
+    saveSettings(next);
 
     nav("/items", { replace: true });
   };
@@ -94,33 +140,27 @@ export default function SetupPage() {
     setKeyColumn("");
     setHarvestUrl("");
     setHarvestSheetName("Harvesting Log");
-    setMsg(t("msg_cleared"));
+
+    setPackingUrl("");
+    setPackingOrSheetName("");
+    setPackingGraftingSheetName("");
+    setPackingTabs([]);
+
+    setMsg("Cleared saved settings.");
     setError("");
   };
 
   return (
     <div className="page" style={{ maxWidth: 780 }}>
-      <h2>{t("setup_title")}</h2>
+      <h2>Setup</h2>
 
       {error && <div className="alert alert-error">{error}</div>}
       {msg && <div className="alert alert-ok">{msg}</div>}
 
       <div className="card">
-        <h3>{t("setup_language_title")}</h3>
+        <h3>1) Proxy URL</h3>
         <label className="field">
-          {t("setup_language_label")}
-          <select value={lang} onChange={(e) => setLang(e.target.value)}>
-            <option value="en">{t("lang_en")}</option>
-            <option value="vi">{t("lang_vi")}</option>
-            <option value="es">{t("lang_es")}</option>
-          </select>
-        </label>
-      </div>
-
-      <div className="card">
-        <h3>{t("setup_proxy_title")}</h3>
-        <label className="field">
-          {t("setup_proxy_label")}
+          Cloudflare Worker URL
           <input
             value={proxyUrl}
             onChange={(e) => setProxyUrl(e.target.value)}
@@ -130,9 +170,9 @@ export default function SetupPage() {
       </div>
 
       <div className="card">
-        <h3>{t("setup_items_title")}</h3>
+        <h3>2) Items Sheet (942 - Vine Master Inventory)</h3>
         <label className="field">
-          {t("setup_sheet_link")}
+          Google Sheet link
           <input
             value={itemsUrl}
             onChange={(e) => setItemsUrl(e.target.value)}
@@ -140,17 +180,17 @@ export default function SetupPage() {
           />
         </label>
         <label className="field">
-          {t("setup_tab_name")}
+          Tab name
           <input value={itemsSheetName} onChange={(e) => setItemsSheetName(e.target.value)} />
         </label>
 
         <button onClick={loadColumns} disabled={loading}>
-          {loading ? t("setup_loading") : t("setup_load_columns")}
+          {loading ? "Loading..." : "Load Columns"}
         </button>
 
         {headers.length > 0 && (
           <label className="field" style={{ marginTop: 10 }}>
-            {t("setup_key_column")}
+            Key Column (QR contains this value)
             <select value={keyColumn} onChange={(e) => setKeyColumn(e.target.value)}>
               {headers.map((h) => (
                 <option key={h} value={h}>
@@ -163,9 +203,9 @@ export default function SetupPage() {
       </div>
 
       <div className="card">
-        <h3>{t("setup_harvest_title")}</h3>
+        <h3>3) Harvest Log Sheet (2026 Harvesting Log)</h3>
         <label className="field">
-          {t("setup_sheet_link")}
+          Google Sheet link
           <input
             value={harvestUrl}
             onChange={(e) => setHarvestUrl(e.target.value)}
@@ -173,16 +213,82 @@ export default function SetupPage() {
           />
         </label>
         <label className="field">
-          {t("setup_tab_name")}
+          Tab name
           <input value={harvestSheetName} onChange={(e) => setHarvestSheetName(e.target.value)} />
         </label>
       </div>
 
+      <div className="card">
+        <h3>4) Packing / Unpacking Sheet (optional)</h3>
+
+        <label className="field">
+          Google Sheet link
+          <input
+            value={packingUrl}
+            onChange={(e) => setPackingUrl(e.target.value)}
+            placeholder="https://docs.google.com/spreadsheets/d/..."
+          />
+        </label>
+
+        <button onClick={loadPackingTabs} disabled={loading || !packingSpreadsheetId}>
+          {loading ? "Loading..." : "Load Tabs"}
+        </button>
+
+        <div style={{ display: "grid", gap: 10, marginTop: 10 }}>
+          <label className="field">
+            OR tab (used for OR-Packing / OR-Unpacking)
+            {packingTabs.length ? (
+              <select value={packingOrSheetName} onChange={(e) => setPackingOrSheetName(e.target.value)}>
+                <option value="">(not set)</option>
+                {packingTabs.map((t) => (
+                  <option key={t} value={t}>
+                    {t}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <input
+                value={packingOrSheetName}
+                onChange={(e) => setPackingOrSheetName(e.target.value)}
+                placeholder="Example: OR"
+              />
+            )}
+          </label>
+
+          <label className="field">
+            GRAFTING tab (used for Grafting-Packing / Grafting-Unpacking)
+            {packingTabs.length ? (
+              <select
+                value={packingGraftingSheetName}
+                onChange={(e) => setPackingGraftingSheetName(e.target.value)}
+              >
+                <option value="">(not set)</option>
+                {packingTabs.map((t) => (
+                  <option key={t} value={t}>
+                    {t}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <input
+                value={packingGraftingSheetName}
+                onChange={(e) => setPackingGraftingSheetName(e.target.value)}
+                placeholder="Example: GRAFTING"
+              />
+            )}
+          </label>
+        </div>
+
+        <div style={{ fontSize: 12, opacity: 0.85, marginTop: 8 }}>
+          You can leave either tab blank. If a tab is not set, the app will prompt you when you try to use that action.
+        </div>
+      </div>
+
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
         <button onClick={saveAll} className="primary">
-          {t("setup_save")}
+          Save Setup
         </button>
-        <button onClick={doClear}>{t("setup_clear")}</button>
+        <button onClick={doClear}>Clear Saved Setup</button>
       </div>
     </div>
   );
