@@ -20,15 +20,12 @@ export default function SetupPage() {
   const [headers, setHeaders] = useState([]);
   const [keyColumn, setKeyColumn] = useState(existing?.keyColumn || "");
 
-  const [harvestUrl, setHarvestUrl] = useState(existing?.harvestUrl || "");
-  const [harvestSheetName, setHarvestSheetName] = useState(existing?.harvestSheetName || "Harvesting Log");
-
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState("");
   const [error, setError] = useState("");
 
   const itemsSpreadsheetId = extractSpreadsheetId(itemsUrl);
-  const harvestSpreadsheetId = extractSpreadsheetId(harvestUrl);
+  
 
   const loadColumns = async () => {
     setError("");
@@ -60,9 +57,7 @@ export default function SetupPage() {
 
     if (!proxyUrl.trim()) return setError("Proxy URL is required.");
     if (!itemsSpreadsheetId) return setError("Items Sheet link invalid.");
-    if (!harvestSpreadsheetId) return setError("Harvest Sheet link invalid.");
     if (!itemsSheetName.trim()) return setError("Items tab name is required.");
-    if (!harvestSheetName.trim()) return setError("Harvest tab name is required.");
     if (!keyColumn.trim()) return setError("Key Column is required. Click Load Columns first.");
 
     const next = {
@@ -72,10 +67,6 @@ export default function SetupPage() {
       itemsSpreadsheetId,
       itemsSheetName: itemsSheetName.trim(),
       keyColumn: keyColumn.trim(),
-
-      harvestUrl,
-      harvestSpreadsheetId,
-      harvestSheetName: harvestSheetName.trim(),
     };
 
     saveSettings(next);
