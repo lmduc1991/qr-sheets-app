@@ -1,29 +1,24 @@
-// src/pages/HarvestManagementPage.jsx
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Html5QrcodeScanner } from "html5-qrcode";
-import { loadSettings, onSettingsChange, saveSettings } from "../store/settingsStore";
+import { loadSettings, saveSettings, onSettingsChange } from "../store/settingsStore";
 import {
-  getItemByKey,
+  getItemAndHarvestByKey,
   appendHarvestLog,
-  getHarvestLogByKey,
   updateHarvestLogByRow,
-  getSheetTabs,
 } from "../api/sheetsApi";
 import { getPhotoCount } from "../store/harvestStore";
 import HarvestCapture from "../components/HarvestCapture";
 import ExportHarvestZipButton from "../components/ExportHarvestZipButton";
+import { useT } from "../i18n";
+
+function today() {
+  const d = new Date();
+  return d.toISOString().slice(0, 10);
+}
 
 function extractSpreadsheetId(url) {
   const m = String(url || "").match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
   return m ? m[1] : "";
-}
-
-function today() {
-  const d = new Date();
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const dd = String(d.getDate()).padStart(2, "0");
-  return `${yyyy}-${mm}-${dd}`;
 }
 
 function PrettyDetails({ item, preferredOrder = [] }) {
@@ -64,45 +59,120 @@ function PrettyDetails({ item, preferredOrder = [] }) {
 }
 
 export default function HarvestManagementPage() {
+  const { t, lang } = useT();
+  const tt = (en, es, vi) => (lang === "es" ? es : lang === "vi" ? vi : en);
+
   const [settings, setSettings] = useState(() => loadSettings());
+  useEffect(() => onSettingsChange(setSettings), []);
 
-  useEffect(() => {
-    return onSettingsChange((s) => setSettings(s));
-  }, []);
-
-  const keyColumn = settings?.keyColumn || "";
   const proxyUrl = settings?.proxyUrl || "";
 
-  // Harvest Setup (inside Harvest page)
+  // Harvest setup
   const [harvestUrl, setHarvestUrl] = useState(settings?.harvestUrl || "");
-  const [harvestSheetName, setHarvestSheetName] = useState(settings?.harvestSheetName || "");
-  const [harvestTabs, setHarvestTabs] = useState([]);
-  const [hSetupLoading, setHSetupLoading] = useState(false);
-  const [hSetupMsg, setHSetupMsg] = useState("");
-  const [hSetupErr, setHSetupErr] = useState("");
-
+  const [harvestSheetName, setHarvestSheetName] = useState(
+    settings?.harvestSheetName || "Harvesting Log"
+  );
   const harvestSpreadsheetId = extractSpreadsheetId(harvestUrl);
-  const hasHarvestSetup = !!settings?.harvestSpreadsheetId && !!settings?.harvestSheetName;
 
-  // App flow
-  const [step, setStep] = useState("idle"); // idle | scanItem | viewItem | verify | form
+  const [setupOpen, setSetupOpen] = useState(false);
+  const [setupSaving, setSetupSaving] = useState(false);
+  const [setupMsg, setSetupMsg] = useState("");
+  const [setupErr, setSetupErr] = useState("");
+
+  useEffect(() => {
+    setHarvestUrl(settings?.harvestUrl || "");
+    setHarvestSheetName(settings?.harvestSheetName || "Harvesting Log");
+  }, [settings?.harvestUrl, settings?.harvestSheetName]);
+
+  const saveHarvestSetup = async () => {
+    setSetupErr("");
+    setSetupMsg("");
+
+    if (!settings?.proxyUrl)
+      return setSetupErr(
+        tt(
+          "Missing Proxy URL. Go to Setup first.",
+          "Falta la URL del proxy. Ve a Configuración primero.",
+          "Thiếu Proxy URL. Vui lòng vào Cài đặt trước."
+        )
+      );
+    if (!harvestSpreadsheetId)
+      return setSetupErr(
+        tt(
+          "Harvest Sheet link invalid (cannot find spreadsheet ID).",
+          "Enlace de Harvest inválido (no se puede encontrar el ID).",
+          "Link Harvest không hợp lệ (không tìm thấy spreadsheet ID)."
+        )
+      );
+    if (!String(harvestSheetName || "").trim())
+      return setSetupErr(
+        tt(
+          "Harvest tab name is required.",
+          "Se requiere el nombre de la pestaña Harvest.",
+          "Cần tên tab Harvest."
+        )
+      );
+
+    setSetupSaving(true);
+    try {
+      saveSettings({
+        harvestUrl,
+        harvestSpreadsheetId,
+        harvestSheetName: String(harvestSheetName || "").trim(),
+      });
+      setSetupMsg(
+        tt(
+          "Harvest settings saved.",
+          "Configuración de Harvest guardada.",
+          "Đã lưu thiết lập Harvest."
+        )
+      );
+    } catch (e) {
+      setSetupErr(
+        e.message ||
+          tt(
+            "Failed to save Harvest settings.",
+            "No se pudo guardar la configuración de Harvest.",
+            "Không thể lưu thiết lập Harvest."
+          )
+      );
+    } finally {
+      setSetupSaving(false);
+    }
+  };
+
+  // Scanner + flow state
+  const [step, setStep] = useState("idle"); // idle | scanning | viewItem | verifyProcessing
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
 
   const [itemKey, setItemKey] = useState("");
-  const [item, setItem] = useState(null);
   const [headers, setHeaders] = useState([]);
+  const [item, setItem] = useState(null);
 
-  const [harvestExists, setHarvestExists] = useState(false);
-  const [harvestRow, setHarvestRow] = useState(null);
-  const [formMode, setFormMode] = useState("create"); // create | view | edit
+  const [harvestRow, setHarvestRow] = useState(null); // row index in sheet if exists
+  const [harvestFormMode, setHarvestFormMode] = useState("create"); // create | view | edit
+  const [processingFormMode, setProcessingFormMode] = useState("view"); // view | edit
 
-  const [form, setForm] = useState({
+  const [harvestForm, setHarvestForm] = useState({
+    harvestingDateInput: today(),
     harvestingDate: today(),
     numberOfShoot: "",
     shoot1Length: "",
     shoot2Length: "",
   });
+
+  const [processingForm, setProcessingForm] = useState({
+    processingDateInput: today(),
+    processingDate: today(),
+    numberXL: "",
+    numberL: "",
+    numberM: "",
+    numberS: "",
+    numberOR: "",
+  });
+
+  const [isSaving, setIsSaving] = useState(false);
 
   const scannerRef = useRef(null);
 
@@ -113,17 +183,49 @@ export default function HarvestManagementPage() {
       } catch {}
       scannerRef.current = null;
     }
+    const el1 = document.getElementById("harvest-item-reader");
+    if (el1) el1.innerHTML = "";
+    const el2 = document.getElementById("processing-label-reader");
+    if (el2) el2.innerHTML = "";
   };
 
-  const startScanner = (domId, onScanOnce) => {
+  const resetStateForNewScan = () => {
+    setItemKey("");
+    setHeaders([]);
+    setItem(null);
+    setHarvestRow(null);
+    setHarvestFormMode("create");
+    setProcessingFormMode("view");
+    setHarvestForm({
+      harvestingDateInput: today(),
+      harvestingDate: today(),
+      numberOfShoot: "",
+      shoot1Length: "",
+      shoot2Length: "",
+    });
+    setProcessingForm({
+      processingDateInput: today(),
+      processingDate: today(),
+      numberXL: "",
+      numberL: "",
+      numberM: "",
+      numberS: "",
+      numberOR: "",
+    });
+  };
+
+  const startItemScanner = () => {
     if (scannerRef.current) return;
 
-    const el = document.getElementById(domId);
+    setError("");
+    setStatus("");
+
+    const el = document.getElementById("harvest-item-reader");
     if (el) el.innerHTML = "";
 
     const qrbox = Math.min(340, Math.floor(window.innerWidth * 0.8));
     const scanner = new Html5QrcodeScanner(
-      domId,
+      "harvest-item-reader",
       { fps: 15, qrbox, experimentalFeatures: { useBarCodeDetectorIfSupported: true } },
       false
     );
@@ -133,7 +235,7 @@ export default function HarvestManagementPage() {
         const key = String(decodedText || "").trim();
         if (!key) return;
         await stopScanner();
-        onScanOnce(key);
+        await loadItemAndHarvest(key);
       },
       () => {}
     );
@@ -141,246 +243,266 @@ export default function HarvestManagementPage() {
     scannerRef.current = scanner;
   };
 
-  const loadHarvestTabs = async () => {
-    setHSetupErr("");
-    setHSetupMsg("");
-
-    if (!proxyUrl.trim()) return setHSetupErr("Proxy URL is missing. Go to Setup first.");
-    if (!harvestSpreadsheetId) return setHSetupErr("Harvest sheet link invalid.");
-
-    setHSetupLoading(true);
-    try {
-      const tabs = await getSheetTabs(harvestSpreadsheetId);
-      setHarvestTabs(tabs);
-      setHSetupMsg("Tabs loaded. Choose the Harvest tab then Save.");
-    } catch (e) {
-      setHSetupErr(e.message || "Failed to load tabs.");
-    } finally {
-      setHSetupLoading(false);
-    }
-  };
-
-  const saveHarvestSetup = () => {
-    setHSetupErr("");
-    setHSetupMsg("");
-
-    if (!harvestSpreadsheetId) return setHSetupErr("Harvest sheet link invalid.");
-    if (!harvestSheetName.trim()) return setHSetupErr("Harvest tab is required.");
-
-    saveSettings({
-      harvestUrl,
-      harvestSpreadsheetId,
-      harvestSheetName: harvestSheetName.trim(),
-    });
-
-    setHSetupMsg("Harvest setup saved. You can start scanning now.");
-  };
-
-  const resetStateForNewScan = () => {
-    setStatus("");
+  const returnToIdleReady = async (msg) => {
+    await stopScanner();
+    resetStateForNewScan();
+    setStep("idle");
     setError("");
-    setItemKey("");
-    setItem(null);
-    setHeaders([]);
-    setHarvestExists(false);
-    setHarvestRow(null);
-    setFormMode("create");
-    setForm({
-      harvestingDate: today(),
-      numberOfShoot: "",
-      shoot1Length: "",
-      shoot2Length: "",
-    });
+    setStatus(msg || tt("Ready to scan next item.", "Listo para escanear el siguiente.", "Sẵn sàng quét mã tiếp theo."));
   };
 
-  const beginScanItem = async () => {
-    // Must have harvest setup before scanning
-    const s = loadSettings();
-    if (!s?.harvestSpreadsheetId || !s?.harvestSheetName) {
-      alert("Harvest sheet is not set. Please set it up in Harvest Management first.");
+  const loadItemAndHarvest = async (key) => {
+    setError("");
+    setStatus(t("status_loading_item"));
+
+    if (!settings?.itemsSpreadsheetId || !settings?.itemsSheetName || !settings?.keyColumn) {
+      setStatus("");
+      setError(t("please_go_setup_first"));
+      return;
+    }
+    if (!harvestSpreadsheetId || !String(harvestSheetName || "").trim()) {
+      setStatus("");
+      setError(tt("Harvest log not set. Open Harvest Log Sheet Setup first.", "Harvest log no configurado. Abre Configuración primero.", "Chưa thiết lập Harvest log. Vui lòng mở Thiết lập trước."));
       return;
     }
 
-    resetStateForNewScan();
-    setStep("scanItem");
-    await stopScanner();
+    try {
+      const r = await getItemAndHarvestByKey({
+        itemKey: key,
+        itemSpreadsheetId: settings.itemsSpreadsheetId,
+        itemSheetName: settings.itemsSheetName,
+        itemKeyColumn: settings.keyColumn,
 
-    setTimeout(() => {
-      startScanner("harvest-item-reader", async (key) => {
-        setError("");
-        setStatus("Loading item...");
-        try {
-          const r = await getItemByKey(key);
-          setHeaders(r.headers || []);
-          if (!r.found) throw new Error("Item not found in MASTER LIST.");
-
-          setItemKey(key);
-          setItem(r.item);
-
-          setStatus("Checking Harvest Log...");
-          const hr = await getHarvestLogByKey(key);
-          if (hr?.found) {
-            setHarvestExists(true);
-            setHarvestRow(hr.rowIndex);
-            setForm({
-              harvestingDate: hr.data.harvestingDate || today(),
-              numberOfShoot: hr.data.numberOfShoot || "",
-              shoot1Length: hr.data.shoot1Length || "",
-              shoot2Length: hr.data.shoot2Length || "",
-            });
-            setFormMode("view");
-            setStatus("Item loaded (already in Harvest Log).");
-          } else {
-            setHarvestExists(false);
-            setFormMode("create");
-            setStatus("Item loaded.");
-          }
-
-          setStep("viewItem");
-        } catch (e) {
-          setStatus("");
-          setError(e.message || "Failed to load item.");
-          setStep("scanItem");
-        }
+        harvestSpreadsheetId,
+        harvestSheetName: String(harvestSheetName || "").trim(),
       });
-    }, 150);
+
+      setHeaders(r.itemHeaders || []);
+      if (!r.itemFound) {
+        setStatus("");
+        setError(`${t("err_item_not_found_in")} ${settings.itemsSheetName}.`);
+        return;
+      }
+
+      setItemKey(key);
+      setItem(r.item);
+      setStatus(t("status_item_loaded"));
+
+      if (r.harvestFound) {
+        setHarvestRow(r.harvestRow);
+        // Load existing harvest + processing values if present
+        const h = r.harvest || {};
+        setHarvestForm((p) => ({
+          ...p,
+          harvestingDateInput: h.harvestingDateInput || p.harvestingDateInput,
+          harvestingDate: h.harvestingDate || p.harvestingDate,
+          numberOfShoot: h.numberOfShoot || "",
+          shoot1Length: h.shoot1Length || "",
+          shoot2Length: h.shoot2Length || "",
+        }));
+        setProcessingForm((p) => ({
+          ...p,
+          processingDateInput: h.processingDateInput || p.processingDateInput,
+          processingDate: h.processingDate || p.processingDate,
+          numberXL: h.numberXL || "",
+          numberL: h.numberL || "",
+          numberM: h.numberM || "",
+          numberS: h.numberS || "",
+          numberOR: h.numberOR || "",
+        }));
+        setHarvestFormMode("view");
+        setProcessingFormMode("view");
+      } else {
+        setHarvestRow(null);
+        setHarvestFormMode("create");
+        setProcessingFormMode("view");
+      }
+
+      setStep("viewItem");
+    } catch (e) {
+      setStatus("");
+      setError(e.message || t("err_failed_load_item"));
+    }
   };
 
-  const beginVerify = async () => {
-    setError("");
-    setStatus("Scan Harvest Label QR (must match item).");
-    setStep("verify");
-    await stopScanner();
+  const startProcessingLabelScanner = () => {
+    if (scannerRef.current) return;
 
-    setTimeout(() => {
-      startScanner("harvest-label-reader", async (harvestKey) => {
-        if (harvestKey === itemKey) {
-          setError("");
-          setStatus("Matched. Continue to harvest form.");
-          setFormMode("create");
-          setStep("form");
+    setError("");
+    setStatus("");
+
+    const el = document.getElementById("processing-label-reader");
+    if (el) el.innerHTML = "";
+
+    const qrbox = Math.min(340, Math.floor(window.innerWidth * 0.8));
+    const scanner = new Html5QrcodeScanner(
+      "processing-label-reader",
+      { fps: 15, qrbox, experimentalFeatures: { useBarCodeDetectorIfSupported: true } },
+      false
+    );
+
+    scanner.render(
+      async (decodedText) => {
+        const labelKey = String(decodedText || "").trim();
+        if (!labelKey) return;
+
+        if (labelKey !== String(itemKey || "").trim()) {
+          alert(t("qr_not_match_scan_another"));
           return;
         }
 
-        alert("QR not match, please scan another");
-        beginVerify();
-      });
-    }, 150);
-  };
+        await stopScanner();
+        setStep("viewItem");
+        setStatus("");
+        setError("");
+      },
+      () => {}
+    );
 
-  const openExistingHarvestForm = () => {
-    setError("");
-    setStatus("Loaded Harvest form from log.");
-    setStep("form");
-    setFormMode("view");
+    scannerRef.current = scanner;
   };
 
   const saveHarvest = async () => {
     setError("");
-    setStatus(formMode === "edit" ? "Saving changes..." : "Saving harvest log...");
+    setStatus(t("status_saving"));
 
+    if (!itemKey) return;
+
+    setIsSaving(true);
     try {
       const photoCount = getPhotoCount(itemKey);
 
-      if (formMode === "edit") {
-        if (harvestRow == null) throw new Error("Cannot edit: missing harvest row reference.");
-
+      if (harvestRow != null) {
         await updateHarvestLogByRow({
           rowIndex: harvestRow,
-          itemKey,
-          harvestingDate: form.harvestingDate,
-          numberOfShoot: form.numberOfShoot,
-          shoot1Length: form.shoot1Length,
-          shoot2Length: form.shoot2Length,
+          harvestingDateInput: harvestForm.harvestingDateInput,
+          harvestingDate: harvestForm.harvestingDate,
+          numberOfShoot: harvestForm.numberOfShoot,
+          shoot1Length: harvestForm.shoot1Length,
+          shoot2Length: harvestForm.shoot2Length,
           photoCount,
         });
-
-        setStatus("Updated Harvesting Log. Ready for next scan.");
       } else {
         await appendHarvestLog({
           itemKey,
-          harvestingDate: form.harvestingDate,
-          numberOfShoot: form.numberOfShoot,
-          shoot1Length: form.shoot1Length,
-          shoot2Length: form.shoot2Length,
+          harvestingDateInput: harvestForm.harvestingDateInput,
+          harvestingDate: harvestForm.harvestingDate,
+          numberOfShoot: harvestForm.numberOfShoot,
+          shoot1Length: harvestForm.shoot1Length,
+          shoot2Length: harvestForm.shoot2Length,
           photoCount,
         });
-
-        setStatus("Saved to Harvesting Log. Ready for next scan.");
       }
 
-      await beginScanItem();
+      await returnToIdleReady(
+        tt(
+          "Harvest saved. Ready to scan next item.",
+          "Cosecha guardada. Listo para el siguiente.",
+          "Đã lưu thu hoạch. Sẵn sàng quét mã tiếp theo."
+        )
+      );
     } catch (e) {
       setStatus("");
-      setError(e.message || "Failed to save harvest log.");
+      setError(e.message || t("err_save_failed"));
+    } finally {
+      setIsSaving(false);
     }
   };
 
-  if (!proxyUrl) return <div className="page">Please go to Setup first.</div>;
+  const saveProcessing = async () => {
+    setError("");
+    setStatus(t("status_saving"));
+
+    if (!itemKey) return;
+
+    setIsSaving(true);
+    try {
+      const photoCount = getPhotoCount(itemKey);
+
+      if (harvestRow != null) {
+        await updateHarvestLogByRow({
+          rowIndex: harvestRow,
+          processingDateInput: processingForm.processingDateInput,
+          processingDate: processingForm.processingDate,
+          numberXL: processingForm.numberXL,
+          numberL: processingForm.numberL,
+          numberM: processingForm.numberM,
+          numberS: processingForm.numberS,
+          numberOR: processingForm.numberOR,
+          photoCount,
+        });
+      } else {
+        await appendHarvestLog({
+          itemKey,
+          processingDateInput: processingForm.processingDateInput,
+          processingDate: processingForm.processingDate,
+          numberXL: processingForm.numberXL,
+          numberL: processingForm.numberL,
+          numberM: processingForm.numberM,
+          numberS: processingForm.numberS,
+          numberOR: processingForm.numberOR,
+          photoCount,
+        });
+      }
+
+      await returnToIdleReady(
+        tt(
+          "Processing saved. Ready to scan next item.",
+          "Procesamiento guardado. Listo para el siguiente.",
+          "Đã lưu xử lý. Sẵn sàng quét mã tiếp theo."
+        )
+      );
+    } catch (e) {
+      setStatus("");
+      setError(e.message || t("err_save_failed"));
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  useEffect(() => {
+    return () => stopScanner();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  if (!proxyUrl) return <div className="page">{t("please_go_setup_first")}</div>;
 
   return (
-    <div className="page">
-      <h2>Harvest Management</h2>
+    <div className="page" style={{ maxWidth: 1100 }}>
+      <h2>{t("tab_harvest")}</h2>
 
-      {/* Harvest Setup Panel */}
-      <div className="card">
-        <h3>Harvest Setup</h3>
-
-        {hSetupErr && <div className="alert alert-error">{hSetupErr}</div>}
-        {hSetupMsg && <div className="alert alert-ok">{hSetupMsg}</div>}
-
-        <label className="field">
-          Harvest Google Sheet link
-          <input
-            value={harvestUrl}
-            onChange={(e) => setHarvestUrl(e.target.value)}
-            placeholder="https://docs.google.com/spreadsheets/d/..."
-          />
-        </label>
-
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-          <button onClick={loadHarvestTabs} disabled={hSetupLoading || !harvestSpreadsheetId}>
-            {hSetupLoading ? "Loading..." : "Load Tabs"}
-          </button>
-
-          <button onClick={saveHarvestSetup} disabled={!harvestSpreadsheetId || !harvestSheetName.trim()}>
-            Save Harvest Setup
-          </button>
+      <div className="card" style={{ marginBottom: 10 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+          <div style={{ fontWeight: 800 }}>{tt("Harvest Log Sheet Setup", "Configuración de Harvest Log", "Thiết lập Harvest Log")}</div>
+          <button onClick={() => setSetupOpen((v) => !v)}>{setupOpen ? t("close") : t("storage_settings")}</button>
         </div>
 
-        <label className="field" style={{ marginTop: 10 }}>
-          Harvest tab
-          {harvestTabs.length ? (
-            <select value={harvestSheetName} onChange={(e) => setHarvestSheetName(e.target.value)}>
-              <option value="">(choose tab)</option>
-              {harvestTabs.map((t) => (
-                <option key={t} value={t}>
-                  {t}
-                </option>
-              ))}
-            </select>
-          ) : (
-            <input
-              value={harvestSheetName}
-              onChange={(e) => setHarvestSheetName(e.target.value)}
-              placeholder="Harvesting Log"
-            />
-          )}
-        </label>
+        {setupOpen && (
+          <div style={{ marginTop: 12 }}>
+            {setupErr && <div className="alert alert-error">{setupErr}</div>}
+            {setupMsg && <div className="alert alert-ok">{setupMsg}</div>}
 
-        {!hasHarvestSetup && (
-          <div className="alert" style={{ marginTop: 10 }}>
-            Harvest is not configured yet. Please set it up above before scanning.
+            <label className="field">
+              {t("google_sheet_link")}
+              <input
+                value={harvestUrl}
+                onChange={(e) => setHarvestUrl(e.target.value)}
+                placeholder="https://docs.google.com/spreadsheets/d/..."
+              />
+            </label>
+
+            <label className="field">
+              {t("tab_name")}
+              <input value={harvestSheetName} onChange={(e) => setHarvestSheetName(e.target.value)} />
+            </label>
+
+            <button className="primary" onClick={saveHarvestSetup} disabled={setupSaving}>
+              {setupSaving ? t("saving") : tt("Save Harvest Setup", "Guardar configuración de Harvest", "Lưu thiết lập Harvest")}
+            </button>
           </div>
         )}
       </div>
 
-      {/* Export ZIP always visible */}
-      <div className="card" style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-        <ExportHarvestZipButton />
-      </div>
-
-      {/* Inline status + error */}
       {(status || error) && (
         <div className="card" style={{ marginTop: 10 }}>
           {status && <div className="alert">{status}</div>}
@@ -390,137 +512,252 @@ export default function HarvestManagementPage() {
 
       {step === "idle" && (
         <div className="card">
-          <p>Camera will only start when you press Start Scanning.</p>
-          <button className="primary" onClick={beginScanItem} disabled={!hasHarvestSetup}>
-            Start Scanning
-          </button>
-        </div>
-      )}
-
-      {step === "scanItem" && (
-        <div className="card">
-          <p>
-            Scan Item QR (Key Column: <strong>{keyColumn}</strong>)
-          </p>
-          <div id="harvest-item-reader" />
-          <button style={{ marginTop: 10 }} onClick={() => setStep("idle")}>
-            Stop
-          </button>
-        </div>
-      )}
-
-      {step === "viewItem" && (
-        <div className="card">
-          <div>
-            <strong>Scanned Key:</strong> {itemKey}
+          <div style={{ fontSize: 13, opacity: 0.85 }}>
+            {tt("Ready. Click Start Scanning.", "Listo. Pulsa Iniciar escaneo.", "Sẵn sàng. Bấm Bắt đầu quét.")}
           </div>
 
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
-            <button
-              className="primary"
-              onClick={beginVerify}
-              disabled={harvestExists}
-              style={harvestExists ? { opacity: 0.4, cursor: "not-allowed" } : undefined}
-            >
-              Harvest
-            </button>
+          <button
+            className="primary"
+            style={{ marginTop: 10 }}
+            onClick={async () => {
+              resetStateForNewScan();
+              setStep("scanning");
+              setStatus("");
+              setError("");
+              await stopScanner();
+              setTimeout(() => startItemScanner(), 150);
+            }}
+          >
+            {tt("Start Scanning", "Iniciar escaneo", "Bắt đầu quét")}
+          </button>
+        </div>
+      )}
 
-            {harvestExists && <button onClick={openExistingHarvestForm}>Harvest form</button>}
+      {step === "scanning" && (
+        <div className="card">
+          <div style={{ fontWeight: 800, marginBottom: 8 }}>
+            {tt("Scan Item QR (Key Column:", "Escanea el QR del artículo (columna clave:", "Quét QR của item (cột khóa:")}{" "}
+            {settings?.keyColumn || "KEY"}) )
+          </div>
 
-            <button onClick={beginScanItem}>Scan Another Item</button>
+          <div id="harvest-item-reader" />
+
+          <button
+            style={{ marginTop: 10 }}
+            onClick={async () => {
+              await stopScanner();
+              setStep("idle");
+              setStatus("");
+              setError("");
+              resetStateForNewScan();
+            }}
+          >
+            {t("stop")}
+          </button>
+        </div>
+      )}
+
+      {step === "viewItem" && item && (
+        <div className="card">
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+            <div>
+              <div>
+                <strong>{tt("Scanned Key:", "Clave escaneada:", "Mã đã quét:")}</strong> {itemKey}
+              </div>
+              <div style={{ fontSize: 12, opacity: 0.85 }}>
+                {tt("Item:", "Artículo:", "Item:")} {settings?.itemsSheetName || ""}
+              </div>
+            </div>
+
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+              <button
+                onClick={async () => {
+                  await returnToIdleReady(tt("Ready to scan next item.", "Listo para el siguiente.", "Sẵn sàng quét mã tiếp theo."));
+                }}
+              >
+                {tt("Start Scanning", "Iniciar escaneo", "Bắt đầu quét")}
+              </button>
+            </div>
           </div>
 
           <div style={{ marginTop: 12 }}>
-            <h4 style={{ margin: "0 0 10px 0" }}>Item details</h4>
+            <h4 style={{ margin: "0 0 10px 0" }}>{t("item_details")}</h4>
             <PrettyDetails item={item} preferredOrder={headers} />
           </div>
 
-          {harvestExists && (
-            <div className="alert" style={{ marginTop: 12 }}>
-              This item already exists in Harvesting Log. Use “Harvest form” to view/edit.
+          <div style={{ marginTop: 18, display: "grid", gap: 12 }}>
+            <div className="card" style={{ background: "#fafafa" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                <h3 style={{ margin: 0 }}>{tt("Harvest Form", "Formulario de cosecha", "Form thu hoạch")}</h3>
+
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  {harvestFormMode === "view" && (
+                    <button className="primary" onClick={() => setHarvestFormMode("edit")}>
+                      {t("edit")}
+                    </button>
+                  )}
+                  {harvestFormMode === "edit" && (
+                    <button onClick={() => setHarvestFormMode("view")}>{t("cancel_edit")}</button>
+                  )}
+                </div>
+              </div>
+
+              <div className="grid" style={{ marginTop: 10 }}>
+                <label className="field">
+                  {tt("Harvest Date", "Fecha de cosecha", "Ngày thu hoạch")}
+                  <input
+                    type="date"
+                    value={harvestForm.harvestingDate}
+                    onChange={(e) => setHarvestForm((p) => ({ ...p, harvestingDate: e.target.value }))}
+                    disabled={harvestFormMode === "view"}
+                  />
+                </label>
+
+                <label className="field">
+                  {tt("Number of Shoots", "Número de brotes", "Số chồi")}
+                  <input
+                    value={harvestForm.numberOfShoot}
+                    onChange={(e) => setHarvestForm((p) => ({ ...p, numberOfShoot: e.target.value }))}
+                    disabled={harvestFormMode === "view"}
+                  />
+                </label>
+
+                <label className="field">
+                  {tt("Shoot 1 length", "Longitud del brote 1", "Chiều dài chồi 1")}
+                  <input
+                    value={harvestForm.shoot1Length}
+                    onChange={(e) => setHarvestForm((p) => ({ ...p, shoot1Length: e.target.value }))}
+                    disabled={harvestFormMode === "view"}
+                  />
+                </label>
+
+                <label className="field">
+                  {tt("Shoot 2 length", "Longitud del brote 2", "Chiều dài chồi 2")}
+                  <input
+                    value={harvestForm.shoot2Length}
+                    onChange={(e) => setHarvestForm((p) => ({ ...p, shoot2Length: e.target.value }))}
+                    disabled={harvestFormMode === "view"}
+                  />
+                </label>
+              </div>
+
+              <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
+                <HarvestCapture itemId={itemKey} />
+                <ExportHarvestZipButton />
+              </div>
+
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 12 }}>
+                <button className="primary" onClick={saveHarvest} disabled={isSaving}>
+                  {isSaving ? t("saving") : t("save")}
+                </button>
+              </div>
             </div>
-          )}
-        </div>
-      )}
 
-      {step === "verify" && (
-        <div className="card">
-          <p>
-            Scan <strong>Harvest Label</strong> QR. It must match item key: <strong>{itemKey}</strong>
-          </p>
-          <div id="harvest-label-reader" />
-          <button style={{ marginTop: 10 }} onClick={beginVerify}>
-            Scan Again
-          </button>
-        </div>
-      )}
+            <div className="card" style={{ background: "#fafafa" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                <h3 style={{ margin: 0 }}>{tt("Wood Processing Form", "Formulario de procesamiento", "Form xử lý")}</h3>
 
-      {step === "form" && (
-        <div className="card">
-          <h3>Harvest Form</h3>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  {processingFormMode === "view" && (
+                    <button
+                      className="primary"
+                      onClick={async () => {
+                        await stopScanner();
+                        setStep("verifyProcessing");
+                        setTimeout(() => startProcessingLabelScanner(), 150);
+                      }}
+                    >
+                      {tt("Wood Processing", "Procesamiento de madera", "Xử lý gỗ")}
+                    </button>
+                  )}
+                </div>
+              </div>
 
-          {formMode === "view" && (
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
-              <button className="primary" onClick={() => setFormMode("edit")}>
-                Edit
-              </button>
-              <button onClick={beginScanItem}>Back to Scan</button>
+              {step === "verifyProcessing" && (
+                <div style={{ marginTop: 10 }}>
+                  <div id="processing-label-reader" />
+                  <button style={{ marginTop: 10 }} onClick={() => setStep("viewItem")}>
+                    {t("back")}
+                  </button>
+                </div>
+              )}
+
+              <div className="grid" style={{ marginTop: 10 }}>
+                <label className="field">
+                  {tt("Processing Date", "Fecha de procesamiento", "Ngày xử lý")}
+                  <input
+                    type="date"
+                    value={processingForm.processingDate}
+                    onChange={(e) => setProcessingForm((p) => ({ ...p, processingDate: e.target.value }))}
+                    disabled={processingFormMode === "view"}
+                  />
+                </label>
+
+                <label className="field">
+                  XL
+                  <input
+                    value={processingForm.numberXL}
+                    onChange={(e) => setProcessingForm((p) => ({ ...p, numberXL: e.target.value }))}
+                    disabled={processingFormMode === "view"}
+                  />
+                </label>
+
+                <label className="field">
+                  L
+                  <input
+                    value={processingForm.numberL}
+                    onChange={(e) => setProcessingForm((p) => ({ ...p, numberL: e.target.value }))}
+                    disabled={processingFormMode === "view"}
+                  />
+                </label>
+
+                <label className="field">
+                  M
+                  <input
+                    value={processingForm.numberM}
+                    onChange={(e) => setProcessingForm((p) => ({ ...p, numberM: e.target.value }))}
+                    disabled={processingFormMode === "view"}
+                  />
+                </label>
+
+                <label className="field">
+                  S
+                  <input
+                    value={processingForm.numberS}
+                    onChange={(e) => setProcessingForm((p) => ({ ...p, numberS: e.target.value }))}
+                    disabled={processingFormMode === "view"}
+                  />
+                </label>
+
+                <label className="field">
+                  OR
+                  <input
+                    value={processingForm.numberOR}
+                    onChange={(e) => setProcessingForm((p) => ({ ...p, numberOR: e.target.value }))}
+                    disabled={processingFormMode === "view"}
+                  />
+                </label>
+              </div>
+
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 12 }}>
+                <button className="primary" onClick={saveProcessing} disabled={isSaving}>
+                  {isSaving ? t("saving") : tt("Save Processing", "Guardar procesamiento", "Lưu xử lý")}
+                </button>
+
+                <button
+                  onClick={async () => {
+                    await stopScanner();
+                    setStep("viewItem");
+                    setStatus("");
+                    setError("");
+                  }}
+                  disabled={isSaving}
+                >
+                  {t("back")}
+                </button>
+              </div>
             </div>
-          )}
-
-          <div className="grid">
-            <label className="field">
-              Harvesting Date
-              <input
-                type="date"
-                value={form.harvestingDate}
-                disabled={formMode === "view"}
-                onChange={(e) => setForm((prev) => ({ ...prev, harvestingDate: e.target.value }))}
-              />
-            </label>
-
-            <label className="field">
-              Number of shoot
-              <input
-                type="number"
-                value={form.numberOfShoot}
-                disabled={formMode === "view"}
-                onChange={(e) => setForm((prev) => ({ ...prev, numberOfShoot: e.target.value }))}
-              />
-            </label>
-
-            <label className="field">
-              Shoot 1 length
-              <input
-                value={form.shoot1Length}
-                disabled={formMode === "view"}
-                onChange={(e) => setForm((prev) => ({ ...prev, shoot1Length: e.target.value }))}
-              />
-            </label>
-
-            <label className="field">
-              Shoot 2 length
-              <input
-                value={form.shoot2Length}
-                disabled={formMode === "view"}
-                onChange={(e) => setForm((prev) => ({ ...prev, shoot2Length: e.target.value }))}
-              />
-            </label>
           </div>
-
-          <div style={{ marginTop: 12 }}>
-            <h4 style={{ margin: "0 0 10px 0" }}>Photos</h4>
-            <HarvestCapture itemId={itemKey} />
-          </div>
-
-          {formMode !== "view" && (
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
-              <button className="primary" onClick={saveHarvest}>
-                {formMode === "edit" ? "Save Changes" : "Save Harvest Log"}
-              </button>
-              <button onClick={beginScanItem}>Cancel / Scan Another</button>
-            </div>
-          )}
         </div>
       )}
     </div>
