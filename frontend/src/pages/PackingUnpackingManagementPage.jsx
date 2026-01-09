@@ -1,20 +1,24 @@
 import { useMemo, useState } from "react";
 import { loadSettings, saveSettings } from "../store/settingsStore";
 import { getSheetTabs } from "../api/sheetsApi";
+import { useT } from "../i18n";
 
 function extractSpreadsheetId(url) {
   const m = String(url || "").match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
   return m ? m[1] : "";
 }
 
-const MODES = [
-  { id: "or-pack", label: "OR-Packing", needs: "or" },
-  { id: "or-unpack", label: "OR-Unpacking", needs: "or" },
-  { id: "graft-pack", label: "Grafting-Packing", needs: "grafting" },
-  { id: "graft-unpack", label: "Grafting-Unpacking", needs: "grafting" },
-];
-
 export default function PackingUnpackingManagementPage() {
+  const { t, lang } = useT();
+  const tt = (en, es, vi) => (lang === "es" ? es : lang === "vi" ? vi : en);
+
+  const MODES = [
+    { id: "or-pack", label: tt("OR-Packing", "OR-Empaque", "OR-Đóng gói"), needs: "or" },
+    { id: "or-unpack", label: tt("OR-Unpacking", "OR-Desempaque", "OR-Mở gói"), needs: "or" },
+    { id: "graft-pack", label: tt("Grafting-Packing", "Injerto-Empaque", "Ghép-Đóng gói"), needs: "grafting" },
+    { id: "graft-unpack", label: tt("Grafting-Unpacking", "Injerto-Desempaque", "Ghép-Mở gói"), needs: "grafting" },
+  ];
+
   const base = useMemo(() => loadSettings(), []);
   const proxyUrl = base?.proxyUrl || "";
 
@@ -33,16 +37,16 @@ export default function PackingUnpackingManagementPage() {
     setError("");
     setMsg("");
 
-    if (!proxyUrl.trim()) return setError("Proxy URL is missing. Go to Setup first.");
-    if (!packingSpreadsheetId) return setError("Packing sheet link invalid (cannot find spreadsheet ID).");
+    if (!proxyUrl.trim()) return setError(t("proxy_missing_go_setup"));
+    if (!packingSpreadsheetId) return setError(t("packing_sheet_invalid"));
 
     setLoadingTabs(true);
     try {
-      const t = await getSheetTabs(packingSpreadsheetId);
-      setTabs(t);
-      setMsg("Tabs loaded. Choose OR and/or GRAFTING then Save.");
+      const tbs = await getSheetTabs(packingSpreadsheetId);
+      setTabs(tbs);
+      setMsg(t("tabs_loaded_choose_or_grafting"));
     } catch (e) {
-      setError(e.message || "Failed to load tabs.");
+      setError(e.message || tt("Failed to load tabs.", "No se pudieron cargar las pestañas.", "Không thể tải tab."));
     } finally {
       setLoadingTabs(false);
     }
@@ -52,29 +56,47 @@ export default function PackingUnpackingManagementPage() {
     setError("");
     setMsg("");
 
-    if (!packingSpreadsheetId) return setError("Packing sheet link invalid (cannot find spreadsheet ID).");
+    if (!packingSpreadsheetId) return setError(t("packing_sheet_invalid"));
 
     saveSettings({
       packingUrl,
       packingSpreadsheetId,
-      packingOrSheetName: orSheetName.trim(),
-      packingGraftingSheetName: graftingSheetName.trim(),
+      packingOrSheetName: String(orSheetName || "").trim(),
+      packingGraftingSheetName: String(graftingSheetName || "").trim(),
     });
 
-    setMsg("Packing/Unpacking setup saved.");
+    setMsg(t("packing_setup_saved"));
   };
 
   const ensureTabForMode = (needs) => {
     if (!packingSpreadsheetId) {
-      alert("Packing Sheet is not set. Paste the sheet link and Save Packing Setup first.");
+      alert(
+        tt(
+          "Packing Sheet is not set. Paste the sheet link and Save Packing Setup first.",
+          "No está configurada la hoja de Packing. Pega el enlace y guarda primero.",
+          "Chưa thiết lập Packing Sheet. Dán link và lưu trước."
+        )
+      );
       return false;
     }
     if (needs === "or" && !orSheetName.trim()) {
-      alert('OR tab is not set. Choose the OR tab and Save Packing Setup.');
+      alert(
+        tt(
+          "OR tab is not set. Choose the OR tab and Save Packing Setup.",
+          "No está configurada la pestaña OR. Elígela y guarda.",
+          "Chưa thiết lập tab OR. Chọn tab rồi lưu."
+        )
+      );
       return false;
     }
     if (needs === "grafting" && !graftingSheetName.trim()) {
-      alert('GRAFTING tab is not set. Choose the GRAFTING tab and Save Packing Setup.');
+      alert(
+        tt(
+          "GRAFTING tab is not set. Choose the GRAFTING tab and Save Packing Setup.",
+          "No está configurada la pestaña GRAFTING. Elígela y guarda.",
+          "Chưa thiết lập tab GRAFTING. Chọn tab rồi lưu."
+        )
+      );
       return false;
     }
     return true;
@@ -82,23 +104,33 @@ export default function PackingUnpackingManagementPage() {
 
   const start = (m) => {
     if (!ensureTabForMode(m.needs)) return;
-    alert(`OK. Next step: implement scanning + forms for "${m.label}".`);
+    alert(
+      tt(
+        `OK. Next step: implement scanning + forms for "${m.label}".`,
+        `OK. Siguiente paso: implementar escaneo y formularios para "${m.label}".`,
+        `OK. Bước tiếp theo: triển khai quét và form cho "${m.label}".`
+      )
+    );
   };
 
-  if (!proxyUrl) return <div className="page">Please go to Setup first.</div>;
+  if (!proxyUrl) return <div className="page">{t("please_go_setup_first")}</div>;
 
   return (
     <div className="page" style={{ maxWidth: 900 }}>
-      <h2>Packing-Unpacking Management</h2>
+      <h2>{t("tab_packing")}</h2>
 
-      {error && <div className="alert alert-error">{error}</div>}
-      {msg && <div className="alert alert-ok">{msg}</div>}
+      {(msg || error) && (
+        <div className="card" style={{ marginBottom: 10 }}>
+          {error && <div className="alert alert-error">{error}</div>}
+          {msg && <div className="alert alert-ok">{msg}</div>}
+        </div>
+      )}
 
       <div className="card">
-        <h3>Setup (Packing Sheet)</h3>
+        <h3>{t("packing_setup_title")}</h3>
 
         <label className="field">
-          Packing Google Sheet link
+          {t("packing_sheet_link")}
           <input
             value={packingUrl}
             onChange={(e) => setPackingUrl(e.target.value)}
@@ -108,22 +140,22 @@ export default function PackingUnpackingManagementPage() {
 
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
           <button onClick={loadTabs} disabled={loadingTabs || !packingSpreadsheetId}>
-            {loadingTabs ? "Loading..." : "Load Tabs"}
+            {loadingTabs ? t("loading") : t("load_tabs")}
           </button>
           <button onClick={savePackingSetup} disabled={!packingSpreadsheetId}>
-            Save Packing Setup
+            {t("save_packing_setup")}
           </button>
         </div>
 
         <div style={{ display: "grid", gap: 10, marginTop: 12 }}>
           <label className="field">
-            OR tab (OR-Packing / OR-Unpacking)
+            {t("or_tab_label")}
             {tabs.length ? (
               <select value={orSheetName} onChange={(e) => setOrSheetName(e.target.value)}>
-                <option value="">(not set)</option>
-                {tabs.map((t) => (
-                  <option key={t} value={t}>
-                    {t}
+                <option value="">{t("not_set")}</option>
+                {tabs.map((tb) => (
+                  <option key={tb} value={tb}>
+                    {tb}
                   </option>
                 ))}
               </select>
@@ -133,13 +165,13 @@ export default function PackingUnpackingManagementPage() {
           </label>
 
           <label className="field">
-            GRAFTING tab (Grafting-Packing / Grafting-Unpacking)
+            {t("grafting_tab_label")}
             {tabs.length ? (
               <select value={graftingSheetName} onChange={(e) => setGraftingSheetName(e.target.value)}>
-                <option value="">(not set)</option>
-                {tabs.map((t) => (
-                  <option key={t} value={t}>
-                    {t}
+                <option value="">{t("not_set")}</option>
+                {tabs.map((tb) => (
+                  <option key={tb} value={tb}>
+                    {tb}
                   </option>
                 ))}
               </select>
@@ -153,13 +185,11 @@ export default function PackingUnpackingManagementPage() {
           </label>
         </div>
 
-        <div style={{ fontSize: 12, opacity: 0.85, marginTop: 8 }}>
-          OR and GRAFTING are optional. If you start an action without its tab configured, the app will prompt you to set it.
-        </div>
+        <div style={{ fontSize: 12, opacity: 0.85, marginTop: 8 }}>{t("optional_note")}</div>
       </div>
 
       <div className="card">
-        <h3>Choose operation</h3>
+        <h3>{t("choose_operation")}</h3>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
           {MODES.map((m) => (
             <button key={m.id} onClick={() => start(m)}>
