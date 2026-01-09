@@ -4,7 +4,7 @@ import { addPhoto, getPhotos, clearPhotos } from "../store/harvestStore";
 import { useT } from "../i18n";
 
 export default function HarvestCapture({ itemId }) {
-  const { t } = useT();
+  const t  = useT();
 
   const [photos, setPhotos] = useState([]);
   const [cameraOn, setCameraOn] = useState(false);
