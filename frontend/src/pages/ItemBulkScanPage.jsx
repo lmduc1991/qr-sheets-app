@@ -21,6 +21,8 @@ export default function ItemBulkScanPage() {
   const [form, setForm] = useState({});
   const [isSaving, setIsSaving] = useState(false);
 
+  const [scanning, setScanning] = useState(false);
+
   const scannerRef = useRef(null);
 
   const stopScanner = async () => {
@@ -30,6 +32,9 @@ export default function ItemBulkScanPage() {
       } catch {}
       scannerRef.current = null;
     }
+    const el = document.getElementById("bulk-scan-reader");
+    if (el) el.innerHTML = "";
+    setScanning(false);
   };
 
   const startScanner = () => {
@@ -58,24 +63,25 @@ export default function ItemBulkScanPage() {
     );
 
     scannerRef.current = scanner;
+    setScanning(true);
   };
 
   const loadCols = async () => {
     setError("");
-    setStatus(t("status_loading_columns"));
+    setStatus(t("loading_columns"));
     try {
       const h = await getHeaders(settings.itemsSpreadsheetId, settings.itemsSheetName);
       setHeaders(h);
-      setStatus(t("status_columns_loaded"));
+      setStatus(t("columns_loaded_choose_key"));
     } catch (e) {
       setStatus("");
-      setError(e.message || t("err_failed_load_columns"));
+      setError(e.message || t("failed_load_columns"));
     }
   };
 
   const doBulkUpdate = async () => {
     setError("");
-    if (keys.length === 0) return setError(t("err_no_scanned_keys"));
+    if (keys.length === 0) return setError(t("no_scanned_keys_yet"));
 
     const patch = {};
     Object.keys(form).forEach((k) => {
@@ -85,16 +91,16 @@ export default function ItemBulkScanPage() {
       patch[k] = v;
     });
 
-    if (Object.keys(patch).length === 0) return setError(t("err_no_fields_entered"));
+    if (Object.keys(patch).length === 0) return setError(t("no_fields_entered"));
 
     setIsSaving(true);
     try {
       const r = await bulkUpdate(keys, patch);
-      setStatus(`${t("status_bulk_updated")} ${r.updated || 0}. ${t("status_not_found")} ${(r.notFound || []).length}`);
+      setStatus(`${t("bulk_updated")} ${r.updated || 0}. ${t("not_found")} ${(r.notFound || []).length}`);
       setEditing(false);
     } catch (e) {
       setStatus("");
-      setError(e.message || t("err_bulk_update_failed"));
+      setError(e.message || "Bulk update failed.");
     } finally {
       setIsSaving(false);
     }
@@ -104,7 +110,6 @@ export default function ItemBulkScanPage() {
 
   useEffect(() => {
     loadCols();
-    startScanner();
     return () => stopScanner();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -113,27 +118,31 @@ export default function ItemBulkScanPage() {
 
   return (
     <div className="card">
-      <h3>{t("bulk_scan")}</h3>
+      <h3>{t("bulk_scan_title")}</h3>
 
       {status && <div className="alert">{status}</div>}
       {error && <div className="alert alert-error">{error}</div>}
 
       <p>
-        {t("help_scan_many_keys")} <strong>{keys.length}</strong>
+        {t("scan_many_qr")} <strong>{keys.length}</strong>
       </p>
 
-      <div id="bulk-scan-reader" />
-
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
-        <button className="primary" onClick={() => setEditing((v) => !v)} disabled={isSaving}>
-          {editing ? t("cancel_edit") : t("edit")}
-        </button>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+        {!scanning ? (
+          <button className="primary" onClick={startScanner} disabled={isSaving}>
+            {t("start")}
+          </button>
+        ) : (
+          <button onClick={stopScanner} disabled={isSaving}>
+            {t("stop")}
+          </button>
+        )}
 
         <button
           onClick={() => {
             setKeys([]);
             setForm({});
-            setStatus(t("msg_cleared_scanned_keys"));
+            setStatus(t("cleared_scanned_keys"));
           }}
           disabled={isSaving}
         >
@@ -145,9 +154,9 @@ export default function ItemBulkScanPage() {
             onClick={async () => {
               try {
                 await navigator.clipboard.writeText(keys.join("\n"));
-                setStatus(t("msg_copied_clipboard"));
+                setStatus(t("copied_to_clipboard"));
               } catch {
-                setError(t("err_copy_failed"));
+                setError(t("copy_failed"));
               }
             }}
             disabled={isSaving}
@@ -155,7 +164,13 @@ export default function ItemBulkScanPage() {
             {t("copy_all")}
           </button>
         )}
+
+        <button className={editing ? "" : "primary"} onClick={() => setEditing((v) => !v)} disabled={isSaving}>
+          {editing ? t("cancel_edit") : t("edit")}
+        </button>
       </div>
+
+      <div id="bulk-scan-reader" />
 
       {keys.length > 0 && (
         <div style={{ marginTop: 12 }}>
@@ -198,7 +213,7 @@ export default function ItemBulkScanPage() {
 
       {editing && (
         <>
-          <p style={{ marginTop: 12 }}>{t("help_fill_only_fields")}</p>
+          <p style={{ marginTop: 12 }}>{t("fill_only_fields_update")}</p>
 
           <div className="grid">
             {headers
@@ -209,7 +224,7 @@ export default function ItemBulkScanPage() {
                   <input
                     value={form[h] ?? ""}
                     onChange={(e) => setForm((prev) => ({ ...prev, [h]: e.target.value }))}
-                    placeholder={t("placeholder_keep_existing")}
+                    placeholder={t("leave_blank_keep_existing")}
                     disabled={isSaving}
                   />
                 </label>
