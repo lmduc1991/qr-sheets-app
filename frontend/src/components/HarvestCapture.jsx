@@ -4,7 +4,7 @@ import { addPhoto, getPhotos, clearPhotos } from "../store/harvestStore";
 import { useT } from "../i18n";
 
 export default function HarvestCapture({ itemId }) {
-  const t  = useT();
+  const { t } = useT();
 
   const [photos, setPhotos] = useState([]);
   const [cameraOn, setCameraOn] = useState(false);
@@ -28,7 +28,7 @@ export default function HarvestCapture({ itemId }) {
 
   const stopCamera = () => {
     const s = streamRef.current;
-    if (s) s.getTracks().forEach((trk) => trk.stop());
+    if (s) s.getTracks().forEach((t0) => t0.stop());
     streamRef.current = null;
 
     const v = videoRef.current;
@@ -55,12 +55,12 @@ export default function HarvestCapture({ itemId }) {
       });
 
       streamRef.current = stream;
-
       setCameraOn(true);
+
       await new Promise((r) => setTimeout(r, 0));
 
       const v = videoRef.current;
-      if (!v) throw new Error("Video element not ready.");
+      if (!v) throw new Error(t("harvest_capture_video_not_ready"));
 
       v.srcObject = stream;
       v.setAttribute("playsinline", "true");
@@ -76,11 +76,10 @@ export default function HarvestCapture({ itemId }) {
       });
 
       await v.play();
-
       setIsStarting(false);
     } catch (e) {
       setIsStarting(false);
-      setCamError(e?.message || t("err_start_camera"));
+      setCamError(e?.message || t("harvest_capture_cannot_start_camera"));
       stopCamera();
     }
   };
@@ -92,7 +91,7 @@ export default function HarvestCapture({ itemId }) {
     if (!v) return;
 
     if (!v.videoWidth || !v.videoHeight) {
-      setCamError(t("err_camera_not_ready"));
+      setCamError(t("harvest_capture_camera_not_ready"));
       return;
     }
 
@@ -107,7 +106,7 @@ export default function HarvestCapture({ itemId }) {
 
     const ctx = canvas.getContext("2d");
     if (!ctx) {
-      setCamError(t("err_canvas"));
+      setCamError(t("harvest_capture_canvas_error"));
       return;
     }
 
@@ -118,7 +117,7 @@ export default function HarvestCapture({ itemId }) {
     setPhotos(getPhotos(itemId));
   };
 
-  if (!itemId) return <div>{t("err_scan_item_first")}</div>;
+  if (!itemId) return <div>{t("harvest_capture_scan_item_first")}</div>;
 
   return (
     <div>
@@ -127,14 +126,14 @@ export default function HarvestCapture({ itemId }) {
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
         {!cameraOn ? (
           <button className="primary" onClick={startCamera} disabled={isStarting}>
-            {isStarting ? t("btn_starting") : t("btn_take_picture")}
+            {isStarting ? t("harvest_capture_starting") : t("harvest_capture_take_picture")}
           </button>
         ) : (
           <>
             <button className="primary" onClick={capture}>
-              {t("btn_capture")}
+              {t("harvest_capture_capture")}
             </button>
-            <button onClick={stopCamera}>{t("btn_done")}</button>
+            <button onClick={stopCamera}>{t("done")}</button>
           </>
         )}
 
@@ -144,11 +143,11 @@ export default function HarvestCapture({ itemId }) {
             setPhotos([]);
           }}
         >
-          {t("btn_clear_photos_item")}
+          {t("harvest_capture_clear_photos")}
         </button>
 
         <div>
-          <strong>{t("label_photos")}:</strong> {photos.length}
+          <strong>{t("harvest_capture_photos_count")}</strong> {photos.length}
         </div>
       </div>
 
