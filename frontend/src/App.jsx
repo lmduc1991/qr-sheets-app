@@ -5,34 +5,43 @@ import "./App.css";
 import SetupPage from "./pages/SetupPage";
 import ItemsManagementPage from "./pages/ItemsManagementPage";
 import HarvestManagementPage from "./pages/HarvestManagementPage";
+import BinStoragePage from "./pages/BinStoragePage";
 import PackingUnpackingManagementPage from "./pages/PackingUnpackingManagementPage";
 import { loadSettings, onSettingsChange } from "./store/settingsStore";
+import { useT } from "./i18n";
 
 export default function App() {
-  const [settings, setSettings] = useState(() => loadSettings());
-  const hasSetup = !!settings?.proxyUrl; // minimum requirement to call API
+  const { t } = useT();
 
-  useEffect(() => {
-    return onSettingsChange((s) => setSettings(s));
-  }, []);
+  const [settings, setSettings] = useState(() => loadSettings());
+  const hasSetup = !!settings?.proxyUrl;
+
+  useEffect(() => onSettingsChange(setSettings), []);
 
   return (
     <div className="app-layout">
       <header className="app-header">
-        <div className="app-title">QR Sheets App</div>
+        <div className="app-title">{t("app_title")}</div>
 
         <nav className="app-tabs">
           <NavLink className={({ isActive }) => "tab" + (isActive ? " tab-active" : "")} to="/items">
-            Item Management
+            {t("tab_items")}
           </NavLink>
+
           <NavLink className={({ isActive }) => "tab" + (isActive ? " tab-active" : "")} to="/harvest">
-            Harvest Management
+            {t("tab_harvest")}
           </NavLink>
+
+          <NavLink className={({ isActive }) => "tab" + (isActive ? " tab-active" : "")} to="/storage">
+            {t("tab_storage")}
+          </NavLink>
+
           <NavLink className={({ isActive }) => "tab" + (isActive ? " tab-active" : "")} to="/packing">
-            Packing-Unpacking Management
+            {t("tab_packing")}
           </NavLink>
+
           <NavLink className={({ isActive }) => "tab" + (isActive ? " tab-active" : "")} to="/setup">
-            Setup
+            {t("tab_setup")}
           </NavLink>
         </nav>
       </header>
@@ -44,6 +53,7 @@ export default function App() {
 
           <Route path="/items/*" element={hasSetup ? <ItemsManagementPage /> : <Navigate to="/setup" replace />} />
           <Route path="/harvest" element={hasSetup ? <HarvestManagementPage /> : <Navigate to="/setup" replace />} />
+          <Route path="/storage" element={hasSetup ? <BinStoragePage /> : <Navigate to="/setup" replace />} />
           <Route path="/packing" element={hasSetup ? <PackingUnpackingManagementPage /> : <Navigate to="/setup" replace />} />
 
           <Route path="*" element={<Navigate to="/" replace />} />
