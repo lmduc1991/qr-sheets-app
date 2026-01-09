@@ -43,24 +43,10 @@ function PrettyDetails({ item, preferredOrder = [] }) {
 }
 
 export default function ItemScanPage() {
-  // FIX: useT() in your project is used as `const t = useT()` (see ItemsManagementPage).
-  // This is defensive and supports both styles: function or { t }.
-  const tHook = useT();
-  const t =
-    typeof tHook === "function"
-      ? tHook
-      : typeof tHook?.t === "function"
-        ? tHook.t
-        : (k) => k;
+  const { t } = useT();
 
-  // Settings can change after Setup. Subscribe so Scan page updates immediately.
   const [settings, setSettings] = useState(() => loadSettings());
-  useEffect(() => {
-    const unsub = onSettingsChange(setSettings);
-    return () => {
-      if (typeof unsub === "function") unsub();
-    };
-  }, []);
+  useEffect(() => onSettingsChange(setSettings), []);
 
   const keyColumn = settings?.keyColumn || "";
   const itemsSheetName = settings?.itemsSheetName || "";
@@ -68,14 +54,14 @@ export default function ItemScanPage() {
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
 
+  const [scanning, setScanning] = useState(false);
+
   const [scannedKey, setScannedKey] = useState("");
   const [headers, setHeaders] = useState([]);
   const [item, setItem] = useState(null);
 
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState({});
-
-  const [isScanning, setIsScanning] = useState(false);
 
   const scannerRef = useRef(null);
 
@@ -86,7 +72,9 @@ export default function ItemScanPage() {
       } catch {}
       scannerRef.current = null;
     }
-    setIsScanning(false);
+    const el = document.getElementById("item-scan-reader");
+    if (el) el.innerHTML = "";
+    setScanning(false);
   };
 
   const startScanner = () => {
@@ -96,7 +84,7 @@ export default function ItemScanPage() {
     setStatus("");
 
     const el = document.getElementById("item-scan-reader");
-    if (el) el.innerHTML = ""; // reset scanner DOM
+    if (el) el.innerHTML = "";
 
     const qrbox = Math.min(340, Math.floor(window.innerWidth * 0.8));
     const scanner = new Html5QrcodeScanner(
@@ -116,7 +104,7 @@ export default function ItemScanPage() {
     );
 
     scannerRef.current = scanner;
-    setIsScanning(true);
+    setScanning(true);
   };
 
   const loadItem = async (key) => {
@@ -165,7 +153,7 @@ export default function ItemScanPage() {
     }
   };
 
-  const resetToReady = async () => {
+  const resetToScan = async () => {
     setItem(null);
     setScannedKey("");
     setHeaders([]);
@@ -176,17 +164,8 @@ export default function ItemScanPage() {
     await stopScanner();
   };
 
-  const scanAnother = async () => {
-    // Ready state (do NOT auto-open camera)
-    await resetToReady();
-  };
-
   useEffect(() => {
-    // IMPORTANT: Do NOT auto-start scanning on mount.
-    // This prevents a blank-looking scan page after Setup.
-    return () => {
-      stopScanner();
-    };
+    return () => stopScanner();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -194,7 +173,7 @@ export default function ItemScanPage() {
 
   return (
     <div className="card">
-      <h3>{t("scan")}</h3>
+      <h3>{t("scan_title")}</h3>
 
       {status && <div className="alert">{status}</div>}
       {error && <div className="alert alert-error">{error}</div>}
@@ -202,24 +181,28 @@ export default function ItemScanPage() {
       {!item && (
         <>
           <p>
-            {t("label_scan_key_column")}: <strong>{keyColumn}</strong>
+            {t("scan_hint_keycol")} <strong>{keyColumn}</strong>
             {itemsSheetName ? (
               <>
                 {" "}
-                ({t("label_items_tab")}: <strong>{itemsSheetName}</strong>)
+                ({t("items_tab_label")} <strong>{itemsSheetName}</strong>)
               </>
             ) : null}
           </p>
 
-          {!isScanning ? (
-            <button className="primary" onClick={startScanner}>
-              {t("start_scan") || "Start Scan"}
-            </button>
-          ) : (
-            <button onClick={stopScanner}>{t("stop_scan") || "Stop Scan"}</button>
-          )}
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+            {!scanning ? (
+              <button className="primary" onClick={startScanner}>
+                {t("start")}
+              </button>
+            ) : (
+              <button onClick={stopScanner}>{t("stop")}</button>
+            )}
 
-          <div style={{ marginTop: 10 }} id="item-scan-reader" />
+            <button onClick={resetToScan}>{t("reset")}</button>
+          </div>
+
+          <div id="item-scan-reader" />
         </>
       )}
 
@@ -227,21 +210,28 @@ export default function ItemScanPage() {
         <>
           <div style={{ marginBottom: 10 }}>
             <div>
-              <strong>{t("label_key")}:</strong> {scannedKey}
+              <strong>{t("key_label")}</strong> {scannedKey}
             </div>
 
             <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
               <button className="primary" onClick={() => setEditing((v) => !v)}>
                 {editing ? t("cancel_edit") : t("edit")}
               </button>
-              <button onClick={scanAnother}>{t("scan_another")}</button>
+              <button
+                onClick={async () => {
+                  await resetToScan();
+                  startScanner();
+                }}
+              >
+                {t("scan_another")}
+              </button>
             </div>
           </div>
 
           {editing ? (
             <>
               <p>
-                {t("help_edit_except_key")} ({keyColumn}).
+                {t("edit_all_except_key")} ({keyColumn}).
               </p>
               <div className="grid">
                 {headers
@@ -256,14 +246,13 @@ export default function ItemScanPage() {
                     </label>
                   ))}
               </div>
-
               <button className="primary" onClick={save}>
                 {t("save")}
               </button>
             </>
           ) : (
             <div style={{ marginTop: 10 }}>
-              <h4 style={{ margin: "0 0 10px 0" }}>{t("label_item_details")}</h4>
+              <h4 style={{ margin: "0 0 10px 0" }}>{t("item_details")}</h4>
               <PrettyDetails item={item} preferredOrder={headers} />
             </div>
           )}
