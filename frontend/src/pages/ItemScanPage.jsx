@@ -62,6 +62,8 @@ export default function ItemScanPage() {
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState({});
 
+  const [isScanning, setIsScanning] = useState(false);
+
   const scannerRef = useRef(null);
 
   const stopScanner = async () => {
@@ -71,6 +73,7 @@ export default function ItemScanPage() {
       } catch {}
       scannerRef.current = null;
     }
+    setIsScanning(false);
   };
 
   const startScanner = () => {
@@ -100,6 +103,7 @@ export default function ItemScanPage() {
     );
 
     scannerRef.current = scanner;
+    setIsScanning(true);
   };
 
   const loadItem = async (key) => {
@@ -149,7 +153,7 @@ export default function ItemScanPage() {
     }
   };
 
-  const scanAnother = async () => {
+  const resetToReady = async () => {
     setItem(null);
     setScannedKey("");
     setHeaders([]);
@@ -157,15 +161,21 @@ export default function ItemScanPage() {
     setEditing(false);
     setStatus("");
     setError("");
-
     await stopScanner();
-    // small delay helps camera release on some phones/webviews
-    setTimeout(() => startScanner(), 150);
+  };
+
+  const scanAnother = async () => {
+    // Expectation: return to ready state (do NOT auto-open camera)
+    await resetToReady();
   };
 
   useEffect(() => {
-    startScanner();
-    return () => stopScanner();
+    // IMPORTANT change:
+    // Do NOT auto-start scanning on mount.
+    // This prevents landing on a “blank” scan page after Setup.
+    return () => {
+      stopScanner();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -189,7 +199,16 @@ export default function ItemScanPage() {
               </>
             ) : null}
           </p>
-          <div id="item-scan-reader" />
+
+          {!isScanning ? (
+            <button className="primary" onClick={startScanner}>
+              {t("start_scan") || "Start Scan"}
+            </button>
+          ) : (
+            <button onClick={stopScanner}>{t("stop_scan") || "Stop Scan"}</button>
+          )}
+
+          <div style={{ marginTop: 10 }} id="item-scan-reader" />
         </>
       )}
 
@@ -219,10 +238,14 @@ export default function ItemScanPage() {
                   .map((h) => (
                     <label key={h} className="field">
                       {h}
-                      <input value={form[h] ?? ""} onChange={(e) => setForm((prev) => ({ ...prev, [h]: e.target.value }))} />
+                      <input
+                        value={form[h] ?? ""}
+                        onChange={(e) => setForm((prev) => ({ ...prev, [h]: e.target.value }))}
+                      />
                     </label>
                   ))}
               </div>
+
               <button className="primary" onClick={save}>
                 {t("save")}
               </button>
