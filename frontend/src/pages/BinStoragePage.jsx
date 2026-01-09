@@ -8,22 +8,22 @@ import {
   appendBinStorage,
   getExistingChildrenForParent,
 } from "../api/sheetsApi";
+import { useT } from "../i18n";
 
 function extractSpreadsheetId(url) {
   const m = String(url || "").match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
   return m ? m[1] : "";
 }
 
-function uniq(arr) {
-  return Array.from(new Set((arr || []).map((x) => String(x || "").trim()).filter(Boolean)));
-}
-
 export default function BinStoragePage() {
-  // Reactive settings
+  const { t, lang } = useT();
+  const tt = (en, es, vi) => (lang === "es" ? es : lang === "vi" ? vi : en);
+
   const [settings, setSettings] = useState(() => loadSettings());
   useEffect(() => onSettingsChange(setSettings), []);
 
-  // Setup states
+  const proxyUrl = settings?.proxyUrl || "";
+
   const [setupOpen, setSetupOpen] = useState(false);
   const [setupMsg, setSetupMsg] = useState("");
   const [setupErr, setSetupErr] = useState("");
@@ -44,34 +44,27 @@ export default function BinStoragePage() {
     setBinStorageSheetName(settings?.binStorageSheetName || "");
   }, [settings?.storageUrl, settings?.bagStorageSheetName, settings?.binStorageSheetName]);
 
-  const storageReady =
-    !!settings?.storageSpreadsheetId && !!settings?.bagStorageSheetName && !!settings?.binStorageSheetName;
-
   const loadTabs = async () => {
     setSetupErr("");
     setSetupMsg("");
 
-    if (!settings?.proxyUrl) return setSetupErr("Missing Proxy URL. Go to Setup first.");
-    if (!storageSpreadsheetId) return setSetupErr("Storage Sheet link invalid (cannot find spreadsheet ID).");
+    if (!proxyUrl.trim()) return setSetupErr(t("proxy_missing_go_setup"));
+    if (!storageSpreadsheetId)
+      return setSetupErr(
+        tt(
+          "Storage sheet link invalid (cannot find spreadsheet ID).",
+          "Enlace de Storage inválido (no se puede encontrar el ID).",
+          "Link Storage không hợp lệ (không tìm thấy spreadsheet ID)."
+        )
+      );
 
     setTabsLoading(true);
     try {
-      const list = await getSheetTabs(storageSpreadsheetId);
-      setTabs(list);
-
-      // gentle defaults
-      if (!bagStorageSheetName) {
-        const d = list.find((n) => n.toLowerCase().includes("bag")) || "";
-        if (d) setBagStorageSheetName(d);
-      }
-      if (!binStorageSheetName) {
-        const d = list.find((n) => n.toLowerCase().includes("bin")) || "";
-        if (d) setBinStorageSheetName(d);
-      }
-
-      setSetupMsg(`Loaded ${list.length} tab(s). Choose where to write Bag and Bin scans.`);
+      const tbs = await getSheetTabs(storageSpreadsheetId);
+      setTabs(tbs);
+      setSetupMsg(t("tabs_loaded_choose"));
     } catch (e) {
-      setSetupErr(e.message || "Failed to load sheet tabs.");
+      setSetupErr(e.message || t("failed_load_columns"));
     } finally {
       setTabsLoading(false);
     }
@@ -81,10 +74,17 @@ export default function BinStoragePage() {
     setSetupErr("");
     setSetupMsg("");
 
-    if (!settings?.proxyUrl) return setSetupErr("Missing Proxy URL. Go to Setup first.");
-    if (!storageSpreadsheetId) return setSetupErr("Storage Sheet link invalid (cannot find spreadsheet ID).");
-    if (!String(bagStorageSheetName || "").trim()) return setSetupErr("Select a tab for Bag scans.");
-    if (!String(binStorageSheetName || "").trim()) return setSetupErr("Select a tab for Bin scans.");
+    if (!proxyUrl.trim()) return setSetupErr(t("proxy_missing_go_setup"));
+    if (!storageSpreadsheetId)
+      return setSetupErr(
+        tt(
+          "Storage sheet link invalid (cannot find spreadsheet ID).",
+          "Enlace de Storage inválido (no se puede encontrar el ID).",
+          "Link Storage không hợp lệ (không tìm thấy spreadsheet ID)."
+        )
+      );
+    if (!bagStorageSheetName.trim() || !binStorageSheetName.trim())
+      return setSetupErr(t("storage_setup_missing"));
 
     setSetupSaving(true);
     try {
@@ -94,32 +94,29 @@ export default function BinStoragePage() {
         bagStorageSheetName: bagStorageSheetName.trim(),
         binStorageSheetName: binStorageSheetName.trim(),
       });
-      setSetupMsg("Bin Storage settings saved.");
-      setSetupOpen(false);
+      setSetupMsg(t("storage_settings_saved"));
     } catch (e) {
-      setSetupErr(e.message || "Failed to save Bin Storage settings.");
+      setSetupErr(
+        e.message ||
+          tt(
+            "Failed to save Bin Storage settings.",
+            "No se pudo guardar la configuración.",
+            "Không thể lưu thiết lập."
+          )
+      );
     } finally {
       setSetupSaving(false);
     }
   };
 
-  // ---------------------------
-  // Scan workflow
-  // ---------------------------
-  const [mode, setMode] = useState("bag"); // bag -> vines OR bin -> bags
-  const [step, setStep] = useState("idle"); // idle | scanParent | scanChildren
-
+  // --- Flow ---
+  const [mode, setMode] = useState("bag"); // bag | bin
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
 
-  const [parentLabel, setParentLabel] = useState("");
-  const [children, setChildren] = useState([]);
-
-  // NEW: existing values already in sheet for that parent
-  const existingSetRef = useRef(new Set());
-  const [existingCount, setExistingCount] = useState(0);
-
-  const [isSaving, setIsSaving] = useState(false);
+  const [parent, setParent] = useState(""); // bag label or bin label
+  const [childrenExisting, setChildrenExisting] = useState([]);
+  const [childrenScanned, setChildrenScanned] = useState([]);
 
   const scannerRef = useRef(null);
 
@@ -130,26 +127,64 @@ export default function BinStoragePage() {
       } catch {}
       scannerRef.current = null;
     }
+    const el = document.getElementById("storage-reader");
+    if (el) el.innerHTML = "";
   };
 
-  const startScanner = (domId, onScan) => {
+  const reset = async () => {
+    await stopScanner();
+    setStatus("");
+    setError("");
+    setParent("");
+    setChildrenExisting([]);
+    setChildrenScanned([]);
+  };
+
+  const startScanner = () => {
     if (scannerRef.current) return;
 
-    const el = document.getElementById(domId);
+    setError("");
+    setStatus("");
+
+    const el = document.getElementById("storage-reader");
     if (el) el.innerHTML = "";
 
     const qrbox = Math.min(340, Math.floor(window.innerWidth * 0.8));
     const scanner = new Html5QrcodeScanner(
-      domId,
+      "storage-reader",
       { fps: 15, qrbox, experimentalFeatures: { useBarCodeDetectorIfSupported: true } },
       false
     );
 
     scanner.render(
       async (decodedText) => {
-        const v = String(decodedText || "").trim();
-        if (!v) return;
-        onScan(v);
+        const code = String(decodedText || "").trim();
+        if (!code) return;
+
+        // first scan sets parent; subsequent scans add children
+        if (!parent) {
+          setParent(code);
+          setStatus(t("loading_existing_records"));
+          setError("");
+
+          try {
+            const existing = await getExistingChildrenForParent({
+              storageSpreadsheetId,
+              sheetName: mode === "bag" ? bagStorageSheetName : binStorageSheetName,
+              parent,
+              parentValue: code,
+            });
+            setChildrenExisting(existing || []);
+            setStatus("");
+          } catch (e) {
+            setStatus("");
+            setError(e.message || t("err_failed_load_item"));
+          }
+          return;
+        }
+
+        // add child scan
+        setChildrenScanned((prev) => Array.from(new Set([...prev, code])));
       },
       () => {}
     );
@@ -157,212 +192,128 @@ export default function BinStoragePage() {
     scannerRef.current = scanner;
   };
 
-  const resetFlow = async () => {
-    await stopScanner();
-    setStatus("");
-    setError("");
-    setParentLabel("");
-    setChildren([]);
-    existingSetRef.current = new Set();
-    setExistingCount(0);
-    setStep("idle");
-  };
-
-  const begin = async () => {
-    if (isSaving) return;
-
+  const saveToSheet = async () => {
     setError("");
     setStatus("");
 
-    if (!storageReady) {
-      setError("Storage settings missing. Open Bin Storage Settings and complete setup first.");
+    if (!storageSpreadsheetId || !bagStorageSheetName || !binStorageSheetName) {
+      setError(t("storage_setup_missing"));
+      return;
+    }
+    if (!parent) {
+      setError(mode === "bag" ? t("scan_bag_first") : t("scan_bin_first"));
+      return;
+    }
+    if (childrenScanned.length === 0) {
+      setError(tt("No scanned children.", "No hay hijos escaneados.", "Chưa quét dữ liệu con."));
       return;
     }
 
-    await resetFlow();
-
-    setStep("scanParent");
-    setStatus(mode === "bag" ? "Scan Bag label first." : "Scan Bin label first.");
-
-    setTimeout(() => {
-      startScanner("storage-parent-reader", async (label) => {
-        if (isSaving) return;
-
-        await stopScanner();
-
-        const p = String(label || "").trim();
-        setParentLabel(p);
-        setChildren([]);
-
-        // Load existing children for this parent from sheet
-        setStatus("Loading existing records...");
-        setError("");
-
-        try {
-          const existing = await getExistingChildrenForParent({ mode, parentLabel: p });
-          const cleaned = uniq(existing);
-          existingSetRef.current = new Set(cleaned);
-          setExistingCount(cleaned.length);
-        } catch (e) {
-          // non-fatal
-          existingSetRef.current = new Set();
-          setExistingCount(0);
-          setError(e.message || "Failed to load existing records. Duplicates will be blocked on Save.");
-        }
-
-        setStep("scanChildren");
-        setStatus(mode === "bag" ? "Now bulk scan Vine labels into this Bag." : "Now bulk scan Bag labels into this Bin.");
-
-        setTimeout(() => {
-          startScanner("storage-children-reader", (child) => {
-            if (isSaving) return;
-
-            const v = String(child || "").trim();
-            if (!v) return;
-
-            setChildren((prev) => {
-              // block duplicates in-session
-              if (prev.includes(v)) {
-                setStatus(`Duplicate ignored: "${v}" already scanned.`);
-                return prev;
-              }
-
-              // block duplicates already in Google Sheet for this parent
-              if (existingSetRef.current.has(v)) {
-                setStatus(
-                  mode === "bag"
-                    ? `Duplicate ignored: Bag "${parentLabel}" already contains vine "${v}".`
-                    : `Duplicate ignored: Bin "${parentLabel}" already contains bag "${v}".`
-                );
-                return prev;
-              }
-
-              return [...prev, v];
-            });
-          });
-        }, 120);
-      });
-    }, 120);
-  };
-
-  const removeChild = (v) => setChildren((prev) => prev.filter((x) => x !== v));
-
-  const save = async () => {
-    if (isSaving) return;
-
-    setError("");
-    setStatus("");
-
-    const p = String(parentLabel || "").trim();
-    if (!p) return setError("Missing parent label. Scan Bag/Bin first.");
-    if (children.length === 0) return setError("No scanned items yet.");
-
-    setIsSaving(true);
-    setStatus("Saving...");
+    setStatus(t("saving_to_sheet"));
 
     try {
-      // stop camera during save
-      await stopScanner();
-
       if (mode === "bag") {
-        await appendBagStorage({ bagLabel: p, vineIds: children });
-        setStatus("Saved Bag → Vines.");
+        await appendBagStorage({
+          storageSpreadsheetId,
+          sheetName: bagStorageSheetName,
+          bagLabel: parent,
+          vineLabels: childrenScanned,
+        });
       } else {
-        await appendBinStorage({ binLabel: p, bagLabels: children });
-        setStatus("Saved Bin → Bags.");
+        await appendBinStorage({
+          storageSpreadsheetId,
+          sheetName: binStorageSheetName,
+          binLabel: parent,
+          bagLabels: childrenScanned,
+        });
       }
 
-      // Return to default state with NO camera
-      setParentLabel("");
-      setChildren([]);
-      existingSetRef.current = new Set();
-      setExistingCount(0);
-      setStep("idle");
+      setStatus(t("storage_settings_saved"));
+      await reset();
     } catch (e) {
-      // If backend returns duplicate error, show it and remain on scanChildren so user can remove and retry
       setStatus("");
-      setError(e.message || "Save failed.");
-      setStep("scanChildren");
-    } finally {
-      setIsSaving(false);
+      setError(e.message || t("err_save_failed"));
     }
   };
 
-  if (!settings?.proxyUrl) return <div className="page">Please go to Setup first.</div>;
+  useEffect(() => {
+    return () => stopScanner();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  if (!proxyUrl) return <div className="page">{t("please_go_setup_first")}</div>;
 
   return (
-    <div className="page">
-      <h2>Bin Storage</h2>
+    <div className="page" style={{ maxWidth: 1100 }}>
+      <h2>{t("tab_storage")}</h2>
 
-      <div className="card" style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-        <button
-          onClick={() => {
-            setSetupOpen((v) => !v);
-            setSetupErr("");
-            setSetupMsg("");
-          }}
-        >
-          {setupOpen ? "Close Bin Storage Settings" : "Bin Storage Settings"}
-        </button>
-      </div>
-
-      {(setupOpen || !storageReady) && (
-        <div className="card" style={{ marginTop: 10 }}>
-          <h3>Bin Storage Sheet Setup</h3>
-
-          {setupErr && <div className="alert alert-error">{setupErr}</div>}
-          {setupMsg && <div className="alert alert-ok">{setupMsg}</div>}
-
-          <label className="field">
-            Google Sheet link (contains your storage tabs)
-            <input
-              value={storageUrl}
-              onChange={(e) => setStorageUrl(e.target.value)}
-              placeholder="https://docs.google.com/spreadsheets/d/..."
-            />
-          </label>
-
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <button className="primary" onClick={loadTabs} disabled={tabsLoading || !storageSpreadsheetId}>
-              {tabsLoading ? "Loading Tabs…" : "Load Tabs"}
-            </button>
+      <div className="card" style={{ marginBottom: 10 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+          <div style={{ fontWeight: 800 }}>
+            {tt("Bin Storage Sheet Setup", "Configuración de Bin Storage", "Thiết lập Bin Storage")}
           </div>
-
-          <div className="grid" style={{ marginTop: 12 }}>
-            <label className="field">
-              Bag scan → write to tab
-              <select value={bagStorageSheetName} onChange={(e) => setBagStorageSheetName(e.target.value)}>
-                <option value="">-- Select tab --</option>
-                {tabs.map((t) => (
-                  <option key={t} value={t}>
-                    {t}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label className="field">
-              Bin scan → write to tab
-              <select value={binStorageSheetName} onChange={(e) => setBinStorageSheetName(e.target.value)}>
-                <option value="">-- Select tab --</option>
-                {tabs.map((t) => (
-                  <option key={t} value={t}>
-                    {t}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-
-          <button className="primary" onClick={saveStorageSetup} disabled={setupSaving}>
-            {setupSaving ? "Saving..." : "Save Bin Storage Setup"}
-          </button>
-
-          <div style={{ marginTop: 10, fontSize: 13, opacity: 0.8 }}>
-            Tip: Create tabs first in Google Sheets, then click “Load Tabs”, then choose where each scan mode writes.
-          </div>
+          <button onClick={() => setSetupOpen((v) => !v)}>{setupOpen ? t("close") : t("storage_settings")}</button>
         </div>
-      )}
+
+        {setupOpen && (
+          <div style={{ marginTop: 12 }}>
+            {setupErr && <div className="alert alert-error">{setupErr}</div>}
+            {setupMsg && <div className="alert alert-ok">{setupMsg}</div>}
+
+            <label className="field">
+              {t("storage_sheet_link")}
+              <input
+                value={storageUrl}
+                onChange={(e) => setStorageUrl(e.target.value)}
+                placeholder="https://docs.google.com/spreadsheets/d/..."
+              />
+            </label>
+
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <button onClick={loadTabs} disabled={tabsLoading || !storageSpreadsheetId}>
+                {tabsLoading ? t("loading") : t("load_tabs")}
+              </button>
+              <button onClick={saveStorageSetup} disabled={setupSaving || !storageSpreadsheetId}>
+                {setupSaving ? t("saving") : t("save_storage_setup")}
+              </button>
+            </div>
+
+            <div style={{ display: "grid", gap: 10, marginTop: 12 }}>
+              <label className="field">
+                {tt("Bag scan → write to tab", "Escaneo Bag → escribir en pestaña", "Quét Bag → ghi vào tab")}
+                {tabs.length ? (
+                  <select value={bagStorageSheetName} onChange={(e) => setBagStorageSheetName(e.target.value)}>
+                    <option value="">{t("not_set")}</option>
+                    {tabs.map((tb) => (
+                      <option key={tb} value={tb}>
+                        {tb}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input value={bagStorageSheetName} onChange={(e) => setBagStorageSheetName(e.target.value)} />
+                )}
+              </label>
+
+              <label className="field">
+                {tt("Bin scan → write to tab", "Escaneo Bin → escribir en pestaña", "Quét Bin → ghi vào tab")}
+                {tabs.length ? (
+                  <select value={binStorageSheetName} onChange={(e) => setBinStorageSheetName(e.target.value)}>
+                    <option value="">{t("not_set")}</option>
+                    {tabs.map((tb) => (
+                      <option key={tb} value={tb}>
+                        {tb}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input value={binStorageSheetName} onChange={(e) => setBinStorageSheetName(e.target.value)} />
+                )}
+              </label>
+            </div>
+          </div>
+        )}
+      </div>
 
       {(status || error) && (
         <div className="card" style={{ marginTop: 10 }}>
@@ -371,119 +322,132 @@ export default function BinStoragePage() {
         </div>
       )}
 
-      {step === "idle" && (
-        <div className="card">
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-            <button className={mode === "bag" ? "primary" : ""} onClick={() => setMode("bag")} disabled={isSaving}>
-              Bag → Vines
-            </button>
-            <button className={mode === "bin" ? "primary" : ""} onClick={() => setMode("bin")} disabled={isSaving}>
-              Bin → Bags
-            </button>
-          </div>
-
-          <div style={{ marginTop: 10 }}>
-            <p>Ready. Click Start Scanning.</p>
-            <button className="primary" onClick={begin} disabled={!storageReady || isSaving}>
-              Start Scanning
-            </button>
-            {!storageReady && (
-              <div style={{ marginTop: 10, fontSize: 13, opacity: 0.8 }}>
-                Please complete Bin Storage setup above first.
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {step === "scanParent" && (
-        <div className="card">
-          <p>{mode === "bag" ? "Scan Bag Label" : "Scan Bin Label"}</p>
-          <div id="storage-parent-reader" />
-          <button style={{ marginTop: 10 }} onClick={resetFlow} disabled={isSaving}>
-            Cancel
+      <div className="card">
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+          <button className={mode === "bag" ? "primary" : ""} onClick={() => reset().then(() => setMode("bag"))}>
+            {tt("Bag → Vines", "Bag → Vides", "Bag → Cây")}
           </button>
-        </div>
-      )}
+          <button className={mode === "bin" ? "primary" : ""} onClick={() => reset().then(() => setMode("bin"))}>
+            {tt("Bin → Bags", "Bin → Bags", "Bin → Bag")}
+          </button>
 
-      {step === "scanChildren" && (
-        <div className="card">
-          <div style={{ fontWeight: 800 }}>
-            Parent: <span style={{ fontWeight: 700 }}>{parentLabel}</span>
-          </div>
-
-          <p style={{ marginTop: 8 }}>
-            {mode === "bag" ? "Now scan vine labels (bulk)" : "Now scan bag labels (bulk)"}.
-            Scanned: <strong>{children.length}</strong>
-          </p>
-
-          <div style={{ marginTop: 6, fontSize: 13, opacity: 0.85 }}>
-            Existing already in sheet for this parent: <strong>{existingCount}</strong>
-          </div>
-
-          <div id="storage-children-reader" />
-
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
+          <div style={{ marginLeft: "auto", display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button
-              onClick={() => {
-                if (isSaving) return;
-                setChildren([]);
-                setStatus("Cleared scans.");
+              className="primary"
+              onClick={async () => {
+                setStatus("");
+                setError("");
+                await stopScanner();
+                setTimeout(() => startScanner(), 150);
               }}
-              disabled={isSaving}
             >
-              Clear Scans
+              {tt("Start Scanning", "Iniciar escaneo", "Bắt đầu quét")}
             </button>
+            <button onClick={reset}>{t("reset")}</button>
+          </div>
+        </div>
 
-            <button className="primary" onClick={save} disabled={isSaving || !parentLabel || children.length === 0}>
-              {isSaving ? "Saving..." : "Save"}
-            </button>
+        <div style={{ marginTop: 12 }}>
+          <div id="storage-reader" />
+        </div>
 
-            <button onClick={resetFlow} disabled={isSaving}>
-              Cancel
-            </button>
+        <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
+          <div>
+            <strong>{t("parent_label")}</strong> {parent || "-"}
           </div>
 
-          {children.length > 0 && (
-            <div style={{ marginTop: 12 }}>
-              <div style={{ fontWeight: 800, marginBottom: 8 }}>Scanned</div>
-              <div
-                style={{
-                  maxHeight: 220,
-                  overflow: "auto",
-                  border: "1px solid #eee",
-                  borderRadius: 12,
-                  padding: 10,
-                  background: "#fafafa",
-                  display: "flex",
-                  flexWrap: "wrap",
-                  gap: 8,
-                }}
-              >
-                {children.map((v) => (
-                  <div
-                    key={v}
-                    style={{
-                      display: "flex",
-                      gap: 8,
-                      alignItems: "center",
-                      padding: "6px 10px",
-                      borderRadius: 999,
-                      border: "1px solid #ddd",
-                      background: "#fff",
-                    }}
-                  >
-                    <span style={{ fontWeight: 700 }}>{v}</span>
-                    <button onClick={() => removeChild(v)} style={{ padding: "2px 8px" }} disabled={isSaving}>
-                      Remove
-                    </button>
-                  </div>
-                ))}
+          {parent && (
+            <>
+              <div>
+                <strong>{t("existing_records")}</strong>{" "}
+                {childrenExisting.length ? childrenExisting.length : 0}
               </div>
-            </div>
+
+              {childrenExisting.length > 0 && (
+                <div
+                  style={{
+                    maxHeight: 160,
+                    overflow: "auto",
+                    border: "1px solid #eee",
+                    borderRadius: 12,
+                    padding: 10,
+                    background: "#fafafa",
+                    display: "flex",
+                    flexWrap: "wrap",
+                    gap: 8,
+                  }}
+                >
+                  {childrenExisting.map((c) => (
+                    <div
+                      key={c}
+                      style={{
+                        padding: "6px 10px",
+                        borderRadius: 999,
+                        border: "1px solid #ddd",
+                        background: "#fff",
+                        fontWeight: 700,
+                      }}
+                    >
+                      {c}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                <strong>{t("add_scanned")}</strong> {childrenScanned.length}
+
+                <button
+                  onClick={() => setChildrenScanned([])}
+                  disabled={childrenScanned.length === 0}
+                >
+                  {t("clear_scans")}
+                </button>
+
+                <button className="primary" onClick={saveToSheet}>
+                  {t("save_to_sheet")}
+                </button>
+              </div>
+
+              {childrenScanned.length > 0 && (
+                <div
+                  style={{
+                    maxHeight: 220,
+                    overflow: "auto",
+                    border: "1px solid #eee",
+                    borderRadius: 12,
+                    padding: 10,
+                    background: "#fafafa",
+                    display: "flex",
+                    flexWrap: "wrap",
+                    gap: 8,
+                  }}
+                >
+                  {childrenScanned.map((c) => (
+                    <div
+                      key={c}
+                      style={{
+                        display: "flex",
+                        gap: 8,
+                        alignItems: "center",
+                        padding: "6px 10px",
+                        borderRadius: 999,
+                        border: "1px solid #ddd",
+                        background: "#fff",
+                      }}
+                    >
+                      <span style={{ fontWeight: 700 }}>{c}</span>
+                      <button onClick={() => setChildrenScanned((prev) => prev.filter((x) => x !== c))} style={{ padding: "2px 8px" }}>
+                        {t("remove")}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
           )}
         </div>
-      )}
+      </div>
     </div>
   );
 }
