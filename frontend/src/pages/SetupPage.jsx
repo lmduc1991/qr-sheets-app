@@ -25,7 +25,6 @@ export default function SetupPage() {
   const [error, setError] = useState("");
 
   const itemsSpreadsheetId = extractSpreadsheetId(itemsUrl);
-  
 
   const loadColumns = async () => {
     setError("");
@@ -60,16 +59,15 @@ export default function SetupPage() {
     if (!itemsSheetName.trim()) return setError("Items tab name is required.");
     if (!keyColumn.trim()) return setError("Key Column is required. Click Load Columns first.");
 
-    const next = {
+    saveSettings({
       proxyUrl: proxyUrl.trim(),
 
       itemsUrl,
       itemsSpreadsheetId,
       itemsSheetName: itemsSheetName.trim(),
       keyColumn: keyColumn.trim(),
-    };
+    });
 
-    saveSettings(next);
     nav("/items", { replace: true });
   };
 
@@ -80,9 +78,6 @@ export default function SetupPage() {
     setItemsSheetName("MASTER LIST");
     setHeaders([]);
     setKeyColumn("");
-    setHarvestUrl("");
-    setHarvestSheetName("Harvesting Log");
-
     setMsg("Cleared saved settings.");
     setError("");
   };
@@ -116,6 +111,7 @@ export default function SetupPage() {
             placeholder="https://docs.google.com/spreadsheets/d/..."
           />
         </label>
+
         <label className="field">
           Tab name
           <input value={itemsSheetName} onChange={(e) => setItemsSheetName(e.target.value)} />
@@ -137,22 +133,6 @@ export default function SetupPage() {
             </select>
           </label>
         )}
-      </div>
-
-      <div className="card">
-        <h3>3) Harvest Log Sheet (2026 Harvesting Log)</h3>
-        <label className="field">
-          Google Sheet link
-          <input
-            value={harvestUrl}
-            onChange={(e) => setHarvestUrl(e.target.value)}
-            placeholder="https://docs.google.com/spreadsheets/d/..."
-          />
-        </label>
-        <label className="field">
-          Tab name
-          <input value={harvestSheetName} onChange={(e) => setHarvestSheetName(e.target.value)} />
-        </label>
       </div>
 
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
