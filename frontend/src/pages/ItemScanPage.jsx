@@ -43,11 +43,24 @@ function PrettyDetails({ item, preferredOrder = [] }) {
 }
 
 export default function ItemScanPage() {
-  const { t } = useT();
+  // FIX: useT() in your project is used as `const t = useT()` (see ItemsManagementPage).
+  // This is defensive and supports both styles: function or { t }.
+  const tHook = useT();
+  const t =
+    typeof tHook === "function"
+      ? tHook
+      : typeof tHook?.t === "function"
+        ? tHook.t
+        : (k) => k;
 
-  // Settings can change after Setup (new sheet/tab/key column). Subscribe so Scan page updates immediately.
+  // Settings can change after Setup. Subscribe so Scan page updates immediately.
   const [settings, setSettings] = useState(() => loadSettings());
-  useEffect(() => onSettingsChange(setSettings), []);
+  useEffect(() => {
+    const unsub = onSettingsChange(setSettings);
+    return () => {
+      if (typeof unsub === "function") unsub();
+    };
+  }, []);
 
   const keyColumn = settings?.keyColumn || "";
   const itemsSheetName = settings?.itemsSheetName || "";
@@ -83,7 +96,7 @@ export default function ItemScanPage() {
     setStatus("");
 
     const el = document.getElementById("item-scan-reader");
-    if (el) el.innerHTML = ""; // important: reset scanner DOM
+    if (el) el.innerHTML = ""; // reset scanner DOM
 
     const qrbox = Math.min(340, Math.floor(window.innerWidth * 0.8));
     const scanner = new Html5QrcodeScanner(
@@ -135,7 +148,6 @@ export default function ItemScanPage() {
     setError("");
     setStatus(t("status_saving"));
     try {
-      // patch excludes Key column
       const patch = {};
       (headers || []).forEach((h) => {
         if (!h) return;
@@ -165,14 +177,13 @@ export default function ItemScanPage() {
   };
 
   const scanAnother = async () => {
-    // Expectation: return to ready state (do NOT auto-open camera)
+    // Ready state (do NOT auto-open camera)
     await resetToReady();
   };
 
   useEffect(() => {
-    // IMPORTANT change:
-    // Do NOT auto-start scanning on mount.
-    // This prevents landing on a “blank” scan page after Setup.
+    // IMPORTANT: Do NOT auto-start scanning on mount.
+    // This prevents a blank-looking scan page after Setup.
     return () => {
       stopScanner();
     };
