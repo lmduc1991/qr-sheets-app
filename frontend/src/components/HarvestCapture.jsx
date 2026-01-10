@@ -20,9 +20,7 @@ export default function HarvestCapture({ itemId }) {
   }, [itemId]);
 
   useEffect(() => {
-    return () => {
-      stopCamera();
-    };
+    return () => stopCamera();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
