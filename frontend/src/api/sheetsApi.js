@@ -1,4 +1,4 @@
-// src/api/sheetsApi.js
+// frontend/src/api/sheetsApi.js
 import { loadSettings } from "../store/settingsStore";
 
 const mem = {
@@ -29,42 +29,27 @@ function invalidateKey(key) {
   mem.combo.delete(key);
 }
 
-async function parseJsonOrExplain(resp) {
-  const text = await resp.text().catch(() => "");
-
-  // If HTML sneaks through, surface it cleanly
-  if (/^\s*</.test(text)) {
-    throw new Error(
-      `Proxy/Apps Script returned HTML (not JSON). First 200 chars:\n${text.slice(0, 200)}`
-    );
-  }
-
-  try {
-    return text ? JSON.parse(text) : {};
-  } catch {
-    throw new Error(`Proxy returned non-JSON response (HTTP ${resp.status}).`);
-  }
-}
-
-async function callApi(action, payload, { timeoutMs = 12_000 } = {}) {
+async function callApi(action, payload, { timeoutMs = 12000 } = {}) {
   const s = loadSettings();
   if (!s?.proxyUrl) throw new Error("Missing Proxy URL. Go to Setup and save settings first.");
 
   const controller = new AbortController();
-  const to = setTimeout(() => controller.abort(), timeoutMs);
+  const t = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
     const resp = await fetch(s.proxyUrl, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: {
+        "content-type": "application/json",
+      },
       body: JSON.stringify({ action, payload }),
       signal: controller.signal,
     });
 
-    const data = await parseJsonOrExplain(resp);
+    const data = await resp.json().catch(() => ({}));
 
     if (!resp.ok || data?.ok === false) {
-      throw new Error(data?.error || `Request failed (HTTP ${resp.status})`);
+      throw new Error(data?.error || `Request failed (${resp.status})`);
     }
 
     return data;
@@ -72,7 +57,7 @@ async function callApi(action, payload, { timeoutMs = 12_000 } = {}) {
     if (e?.name === "AbortError") throw new Error("Request timed out. Check internet or Apps Script.");
     throw e;
   } finally {
-    clearTimeout(to);
+    clearTimeout(t);
   }
 }
 
@@ -100,12 +85,16 @@ export async function getItemByKey(keyValue) {
     throw new Error("Items settings missing. Check Setup (Items sheet, tab, key column).");
   }
 
-  const data = await callApi("getItemByKey", {
-    spreadsheetId: s.itemsSpreadsheetId,
-    sheetName: s.itemsSheetName,
-    keyColumn: s.keyColumn,
-    keyValue: key,
-  });
+  const data = await callApi(
+    "getItemByKey",
+    {
+      spreadsheetId: s.itemsSpreadsheetId,
+      sheetName: s.itemsSheetName,
+      keyColumn: s.keyColumn,
+      keyValue: key,
+    },
+    { timeoutMs: 12000 }
+  );
 
   setCached(mem.item, key, data, 60_000);
   return data;
@@ -154,7 +143,7 @@ export async function bulkUpdate(keys, patch) {
 function requireHarvestSettings() {
   const s = loadSettings();
   if (!s?.harvestSpreadsheetId || !s?.harvestSheetName) {
-    throw new Error("Harvest settings missing. Open Setup and set Harvest sheet + tab first.");
+    throw new Error("Harvest settings missing. Open Harvest tab and set Harvest sheet + tab first.");
   }
   return s;
 }
@@ -172,6 +161,7 @@ export async function appendHarvestLog(payload) {
 
 export async function getHarvestLogByKey(itemKey) {
   const s = requireHarvestSettings();
+
   return await callApi("getHarvestLogByKey", {
     spreadsheetId: s.harvestSpreadsheetId,
     sheetName: s.harvestSheetName,
@@ -202,21 +192,25 @@ export async function getItemAndHarvestByKey(keyValue) {
     throw new Error("Items settings missing. Check Setup (Items sheet, tab, key column).");
   }
   if (!s?.harvestSpreadsheetId || !s?.harvestSheetName) {
-    throw new Error("Harvest settings missing. Open Setup and set Harvest sheet + tab first.");
+    throw new Error("Harvest settings missing. Open Harvest tab and set Harvest sheet + tab first.");
   }
 
-  const data = await callApi("getItemAndHarvestByKey", {
-    keyValue: key,
-    items: {
-      spreadsheetId: s.itemsSpreadsheetId,
-      sheetName: s.itemsSheetName,
-      keyColumn: s.keyColumn,
+  const data = await callApi(
+    "getItemAndHarvestByKey",
+    {
+      keyValue: key,
+      items: {
+        spreadsheetId: s.itemsSpreadsheetId,
+        sheetName: s.itemsSheetName,
+        keyColumn: s.keyColumn,
+      },
+      harvest: {
+        spreadsheetId: s.harvestSpreadsheetId,
+        sheetName: s.harvestSheetName,
+      },
     },
-    harvest: {
-      spreadsheetId: s.harvestSpreadsheetId,
-      sheetName: s.harvestSheetName,
-    },
-  });
+    { timeoutMs: 12000 }
+  );
 
   setCached(mem.combo, key, data, 60_000);
   return data;
@@ -226,15 +220,11 @@ export async function getItemAndHarvestByKey(keyValue) {
 function requireStorageSettings() {
   const s = loadSettings();
   if (!s?.storageSpreadsheetId || !s?.bagStorageSheetName || !s?.binStorageSheetName) {
-    throw new Error("Storage settings missing. Open Bin Storage page and set Storage sheet + tabs first.");
+    throw new Error("Storage settings missing. Open Bin Storage tab and set Storage sheet + tabs first.");
   }
   return s;
 }
 
-/**
- * Bag -> Vine
- * Appends rows (timestamp, bag_label, vine_id)
- */
 export async function appendBagStorage({ bagLabel, vineIds }) {
   const s = requireStorageSettings();
   return await callApi("appendBagStorage", {
@@ -245,10 +235,6 @@ export async function appendBagStorage({ bagLabel, vineIds }) {
   });
 }
 
-/**
- * Bin -> Bag IN
- * Appends rows (timestamp, bin_label, bag_label)
- */
 export async function appendBinStorage({ binLabel, bagLabels }) {
   const s = requireStorageSettings();
   return await callApi("appendBinStorage", {
@@ -260,11 +246,13 @@ export async function appendBinStorage({ binLabel, bagLabels }) {
 }
 
 /**
- * mode="bag": returns existing vine_id for bag_label
- * mode="bin": returns existing bag_label for bin_label
+ * Load existing children for a parent label so frontend can block duplicates during scanning.
+ * mode="bag": parentLabel = bagLabel, returns vine IDs already in that bag (from Bag tab)
+ * mode="bin": parentLabel = binLabel, returns bag labels already in that bin (from Bin tab)
  */
 export async function getExistingChildrenForParent({ mode, parentLabel }) {
   const s = requireStorageSettings();
+
   const sheetName = mode === "bag" ? s.bagStorageSheetName : s.binStorageSheetName;
 
   const r = await callApi("getExistingChildrenForParent", {
@@ -275,32 +263,4 @@ export async function getExistingChildrenForParent({ mode, parentLabel }) {
   });
 
   return r.children || [];
-}
-
-/**
- * NEW: Find which bin contains this bag label.
- * Uses storage bin scan tab.
- */
-export async function findBinForBagLabel({ bagLabel }) {
-  const s = requireStorageSettings();
-  const r = await callApi("findBinForBagLabel", {
-    spreadsheetId: s.storageSpreadsheetId,
-    sheetName: s.binStorageSheetName,
-    bagLabel,
-  });
-  return { found: !!r.found, binLabel: r.binLabel || "" };
-}
-
-/**
- * NEW: Remove rows for OUT operation (bin_label + bag_labels).
- */
-export async function removeBinStorageByBagLabels({ binLabel, bagLabels }) {
-  const s = requireStorageSettings();
-  const r = await callApi("removeBinStorageByBagLabels", {
-    spreadsheetId: s.storageSpreadsheetId,
-    sheetName: s.binStorageSheetName,
-    binLabel,
-    bagLabels,
-  });
-  return { removed: Number(r.removed || 0), notFound: Array.isArray(r.notFound) ? r.notFound : [] };
 }
