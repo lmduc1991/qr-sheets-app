@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+// src/pages/BinStoragePage.jsx
+import { useEffect, useRef, useState } from "react";
 import { Html5QrcodeScanner } from "html5-qrcode";
 import { loadSettings, saveSettings, onSettingsChange } from "../store/settingsStore";
 import {
@@ -6,670 +7,517 @@ import {
   appendBagStorage,
   appendBinStorage,
   getExistingChildrenForParent,
-  findBinForBagLabel,
-  removeBinStorageByBagLabels,
 } from "../api/sheetsApi";
-import { useT } from "../i18n";
 
-// FIX: support /spreadsheets/u/0/d/<ID> too
 function extractSpreadsheetId(url) {
-  const s = String(url || "").trim();
-  const m = s.match(/\/spreadsheets\/(?:u\/\d+\/)?d\/([a-zA-Z0-9-_]+)/);
+  const m = String(url || "").match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
   return m ? m[1] : "";
 }
 
 function uniq(arr) {
-  const out = [];
-  const seen = new Set();
-  for (const x of arr || []) {
-    const v = String(x || "").trim();
-    if (!v) continue;
-    if (seen.has(v)) continue;
-    seen.add(v);
-    out.push(v);
+  return Array.from(new Set((arr || []).map((x) => String(x || "").trim()).filter(Boolean)));
+}
+
+// Small helper: wait for a DOM element to exist (removes race conditions)
+async function waitForEl(id, tries = 25, delayMs = 40) {
+  for (let i = 0; i < tries; i++) {
+    const el = document.getElementById(id);
+    if (el) return el;
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise((r) => setTimeout(r, delayMs));
   }
-  return out;
+  return null;
 }
 
 export default function BinStoragePage() {
-  const { t, lang } = useT();
-  const tt = (en, es, vi) => (lang === "es" ? es : lang === "vi" ? vi : en);
-
-  const [settings, setSettings] = useState(() => loadSettings() || {});
+  // Reactive settings
+  const [settings, setSettings] = useState(() => loadSettings());
   useEffect(() => onSettingsChange(setSettings), []);
 
-  const proxyUrl = settings?.proxyUrl || "";
+  // Setup states
+  const [setupOpen, setSetupOpen] = useState(false);
+  const [setupMsg, setSetupMsg] = useState("");
+  const [setupErr, setSetupErr] = useState("");
+  const [setupSaving, setSetupSaving] = useState(false);
 
-  // ---- Setup state ----
-  const [setupOpen, setSetupOpen] = useState(true);
-  const [storageUrl, setStorageUrl] = useState(settings?.storageUrl || settings?.storageSheetLink || "");
-  const storageSpreadsheetId = useMemo(() => extractSpreadsheetId(storageUrl), [storageUrl]);
+  const [storageUrl, setStorageUrl] = useState(settings?.storageUrl || "");
+  const storageSpreadsheetId = extractSpreadsheetId(storageUrl);
 
   const [tabs, setTabs] = useState([]);
   const [tabsLoading, setTabsLoading] = useState(false);
-  const [setupMsg, setSetupMsg] = useState("");
-  const [setupErr, setSetupErr] = useState("");
 
   const [bagStorageSheetName, setBagStorageSheetName] = useState(settings?.bagStorageSheetName || "");
   const [binStorageSheetName, setBinStorageSheetName] = useState(settings?.binStorageSheetName || "");
 
   useEffect(() => {
-    setStorageUrl(settings?.storageUrl || settings?.storageSheetLink || "");
+    setStorageUrl(settings?.storageUrl || "");
     setBagStorageSheetName(settings?.bagStorageSheetName || "");
     setBinStorageSheetName(settings?.binStorageSheetName || "");
-  }, [settings?.storageUrl, settings?.storageSheetLink, settings?.bagStorageSheetName, settings?.binStorageSheetName]);
+  }, [settings?.storageUrl, settings?.bagStorageSheetName, settings?.binStorageSheetName]);
 
-  const storageReady = !!settings?.storageSpreadsheetId && !!settings?.bagStorageSheetName && !!settings?.binStorageSheetName;
+  const storageReady =
+    !!settings?.storageSpreadsheetId && !!settings?.bagStorageSheetName && !!settings?.binStorageSheetName;
 
-  // ---- Operation state ----
-  const [op, setOp] = useState("bagToVine"); // bagToVine | binToBag
-  const [direction, setDirection] = useState("in"); // in | out
+  const loadTabs = async () => {
+    setSetupErr("");
+    setSetupMsg("");
 
-  // Bag -> Vine
-  const [bagLabel, setBagLabel] = useState("");
-  const [existingVines, setExistingVines] = useState([]);
-  const [vineIds, setVineIds] = useState([]);
+    if (!settings?.proxyUrl) return setSetupErr("Missing Proxy URL. Go to Setup first.");
+    if (!storageSpreadsheetId) return setSetupErr("Storage Sheet link invalid (cannot find spreadsheet ID).");
 
-  // Bin -> Bag
-  const [binLabel, setBinLabel] = useState("");
-  const [existingBags, setExistingBags] = useState([]);
-  const [bagLabels, setBagLabels] = useState([]);
+    setTabsLoading(true);
+    try {
+      const list = await getSheetTabs(storageSpreadsheetId);
+      setTabs(list);
 
-  const [busy, setBusy] = useState(false);
+      // gentle defaults
+      if (!bagStorageSheetName) {
+        const d = list.find((n) => n.toLowerCase().includes("bag")) || "";
+        if (d) setBagStorageSheetName(d);
+      }
+      if (!binStorageSheetName) {
+        const d = list.find((n) => n.toLowerCase().includes("bin")) || "";
+        if (d) setBinStorageSheetName(d);
+      }
+
+      setSetupMsg(`Loaded ${list.length} tab(s). Choose where to write Bag and Bin scans.`);
+    } catch (e) {
+      setSetupErr(e.message || "Failed to load sheet tabs.");
+    } finally {
+      setTabsLoading(false);
+    }
+  };
+
+  const saveStorageSetup = async () => {
+    setSetupErr("");
+    setSetupMsg("");
+
+    if (!settings?.proxyUrl) return setSetupErr("Missing Proxy URL. Go to Setup first.");
+    if (!storageSpreadsheetId) return setSetupErr("Storage Sheet link invalid (cannot find spreadsheet ID).");
+    if (!String(bagStorageSheetName || "").trim()) return setSetupErr("Select a tab for Bag scans.");
+    if (!String(binStorageSheetName || "").trim()) return setSetupErr("Select a tab for Bin scans.");
+
+    setSetupSaving(true);
+    try {
+      saveSettings({
+        storageUrl,
+        storageSpreadsheetId,
+        bagStorageSheetName: bagStorageSheetName.trim(),
+        binStorageSheetName: binStorageSheetName.trim(),
+      });
+      setSetupMsg("Bin Storage settings saved.");
+      setSetupOpen(false);
+    } catch (e) {
+      setSetupErr(e.message || "Failed to save Bin Storage settings.");
+    } finally {
+      setSetupSaving(false);
+    }
+  };
+
+  // ---------------------------
+  // Scan workflow
+  // ---------------------------
+  const [mode, setMode] = useState("bag"); // bag -> vines OR bin -> bags
+  const [step, setStep] = useState("idle"); // idle | scanParent | scanChildren
+
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
 
-  // ---- Scanner ----
-  const scanBoxId = "storage-reader";
+  const [parentLabel, setParentLabel] = useState("");
+  const [children, setChildren] = useState([]);
+
+  // existing values already in sheet for that parent
+  const existingSetRef = useRef(new Set());
+  const [existingCount, setExistingCount] = useState(0);
+
+  const [isSaving, setIsSaving] = useState(false);
+
   const scannerRef = useRef(null);
-  const [scanTarget, setScanTarget] = useState(null); // bagLabel | vineIds | binLabel | bagLabels
 
-  function clearScannerBox() {
-    const el = document.getElementById(scanBoxId);
-    if (el) el.innerHTML = "";
-  }
-
-  async function stopScanner() {
+  const stopScanner = async () => {
     if (scannerRef.current) {
       try {
         await scannerRef.current.clear();
       } catch {}
       scannerRef.current = null;
     }
-    setScanTarget(null);
-    clearScannerBox();
-  }
+  };
 
-  useEffect(() => {
-    return () => {
-      stopScanner();
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  async function loadExistingForBag(bag) {
-    setStatus(t("loading_existing_records"));
-    const children = await getExistingChildrenForParent({ mode: "bag", parentLabel: bag });
-    setExistingVines(uniq(children));
-    setStatus("");
-  }
-
-  async function loadExistingForBin(bin) {
-    setStatus(t("loading_existing_records"));
-    const children = await getExistingChildrenForParent({ mode: "bin", parentLabel: bin });
-    setExistingBags(uniq(children));
-    setStatus("");
-  }
-
-  function startScanner(target) {
+  const startScanner = async (domId, onScan) => {
     if (scannerRef.current) return;
 
-    setError("");
-    setStatus("");
-    setScanTarget(target);
-    clearScannerBox();
+    const el = await waitForEl(domId);
+    if (!el) {
+      setError("Scanner UI not ready. Please try again.");
+      return;
+    }
+    el.innerHTML = "";
 
     const qrbox = Math.min(340, Math.floor(window.innerWidth * 0.8));
     const scanner = new Html5QrcodeScanner(
-      scanBoxId,
+      domId,
       { fps: 15, qrbox, experimentalFeatures: { useBarCodeDetectorIfSupported: true } },
       false
     );
 
     scanner.render(
       async (decodedText) => {
-        const code = String(decodedText || "").trim();
-        if (!code) return;
-
-        try {
-          // BAG -> VINE
-          if (op === "bagToVine") {
-            if (target === "bagLabel") {
-              setBagLabel(code);
-              setVineIds([]);
-              setExistingVines([]);
-              await loadExistingForBag(code);
-              return;
-            }
-
-            if (target === "vineIds") {
-              if (!bagLabel) {
-                alert(tt("Scan bag first.", "Escanee la bolsa primero.", "Quét bag trước."));
-                return;
-              }
-
-              if (existingVines.includes(code)) {
-                alert(`${tt("Record already exists", "El registro ya existe", "Bản ghi đã tồn tại")}: ${code}`);
-                return;
-              }
-
-              setVineIds((prev) => {
-                if (prev.includes(code)) {
-                  alert(`${tt("Duplicate scanned", "Escaneo duplicado", "Quét trùng")}: ${code}`);
-                  return prev;
-                }
-                return [...prev, code];
-              });
-              return;
-            }
-          }
-
-          // BIN -> BAG
-          if (op === "binToBag") {
-            if (target === "binLabel") {
-              setBinLabel(code);
-              setBagLabels([]);
-              setExistingBags([]);
-              await loadExistingForBin(code);
-              return;
-            }
-
-            if (target === "bagLabels") {
-              if (!binLabel) {
-                alert(tt("Scan bin first.", "Escanee el bin primero.", "Quét bin trước."));
-                return;
-              }
-
-              // block duplicates in current scan
-              if (bagLabels.includes(code)) {
-                alert(`${tt("Duplicate scanned", "Escaneo duplicado", "Quét trùng")}: ${code}`);
-                return;
-              }
-
-              if (direction === "in") {
-                // Check if this bag is already in some bin
-                const r = await findBinForBagLabel({ bagLabel: code });
-                if (r.found && r.binLabel && r.binLabel !== binLabel) {
-                  alert(
-                    `${tt("Bag already exists in bin", "La bolsa ya existe en el bin", "Bag đã tồn tại trong bin")}: ${r.binLabel}`
-                  );
-                  return;
-                }
-                if (r.found && r.binLabel === binLabel) {
-                  alert(
-                    `${tt(
-                      "Bag already exists in this bin",
-                      "La bolsa ya existe en este bin",
-                      "Bag đã tồn tại trong bin này"
-                    )}: ${binLabel}`
-                  );
-                  return;
-                }
-              } else {
-                // OUT: must exist, and must be in this bin
-                const r = await findBinForBagLabel({ bagLabel: code });
-                if (!r.found) {
-                  alert(tt("No existing record for this bag.", "No existe registro para esta bolsa.", "Không có bản ghi cho bag này."));
-                  return;
-                }
-                if (r.binLabel && r.binLabel !== binLabel) {
-                  alert(
-                    `${tt(
-                      "This bag is not in the scanned bin. Current bin",
-                      "Esta bolsa no está en el bin escaneado. Bin actual",
-                      "Bag không nằm trong bin đã quét. Bin hiện tại"
-                    )}: ${r.binLabel}`
-                  );
-                  return;
-                }
-              }
-
-              setBagLabels((prev) => [...prev, code]);
-              return;
-            }
-          }
-        } catch (e) {
-          setStatus("");
-          setError(e?.message || String(e));
-        }
+        const v = String(decodedText || "").trim();
+        if (!v) return;
+        onScan(v);
       },
       () => {}
     );
 
     scannerRef.current = scanner;
-  }
-
-  function resetAll() {
-    stopScanner();
-    setStatus("");
-    setError("");
-
-    setBagLabel("");
-    setExistingVines([]);
-    setVineIds([]);
-
-    setBinLabel("");
-    setExistingBags([]);
-    setBagLabels([]);
-  }
-
-  // ---- Setup actions ----
-  const loadTabs = async () => {
-    setSetupErr("");
-    setSetupMsg("");
-
-    if (!proxyUrl.trim()) return setSetupErr(t("proxy_missing_go_setup"));
-    if (!storageSpreadsheetId)
-      return setSetupErr(
-        tt(
-          "Storage sheet link invalid (cannot find spreadsheet ID).",
-          "Enlace de Storage inválido (no se puede encontrar el ID).",
-          "Link Storage không hợp lệ (không tìm thấy spreadsheet ID)."
-        )
-      );
-
-    setTabsLoading(true);
-    try {
-      const tbs = await getSheetTabs(storageSpreadsheetId);
-      setTabs(tbs);
-      setSetupMsg(t("tabs_loaded_choose"));
-    } catch (e) {
-      setSetupErr(e.message || t("failed_load_columns"));
-    } finally {
-      setTabsLoading(false);
-    }
   };
 
-  const saveStorageSetup = () => {
-    setSetupErr("");
-    setSetupMsg("");
-
-    if (!proxyUrl.trim()) return setSetupErr(t("proxy_missing_go_setup"));
-    if (!storageSpreadsheetId)
-      return setSetupErr(
-        tt(
-          "Storage sheet link invalid (cannot find spreadsheet ID).",
-          "Enlace de Storage inválido (no se puede encontrar el ID).",
-          "Link Storage không hợp lệ (không tìm thấy spreadsheet ID)."
-        )
-      );
-
-    if (!bagStorageSheetName.trim() || !binStorageSheetName.trim()) {
-      return setSetupErr(t("storage_setup_missing"));
-    }
-
-    saveSettings({
-      storageUrl,
-      storageSpreadsheetId,
-      bagStorageSheetName: bagStorageSheetName.trim(),
-      binStorageSheetName: binStorageSheetName.trim(),
-    });
-
-    setSetupMsg(t("storage_settings_saved"));
-    setSetupOpen(false);
+  const resetFlow = async () => {
+    await stopScanner();
+    setStatus("");
+    setError("");
+    setParentLabel("");
+    setChildren([]);
+    existingSetRef.current = new Set();
+    setExistingCount(0);
+    setStep("idle");
   };
 
-  // ---- Save actions ----
-  async function saveBagToVine() {
+  const begin = async () => {
+    if (isSaving) return;
+
     setError("");
     setStatus("");
 
-    if (!storageReady) return setError(t("storage_setup_missing"));
-    if (!bagLabel) return setError(t("scan_bag_first"));
-
-    const vines = uniq(vineIds);
-    if (!vines.length) return setError(tt("Scan at least 1 vine.", "Escanee al menos 1 vid.", "Quét ít nhất 1 vine."));
-
-    setBusy(true);
-    setStatus(t("saving_to_sheet"));
-    try {
-      // safety: re-check existing for bag before write
-      const existing = uniq(await getExistingChildrenForParent({ mode: "bag", parentLabel: bagLabel }));
-      const existingSet = new Set(existing);
-      const toWrite = vines.filter((v) => !existingSet.has(v));
-
-      if (!toWrite.length) {
-        alert(
-          tt(
-            "All scanned vines already exist for this bag.",
-            "Todas las vides ya existen para esta bolsa.",
-            "Tất cả vine đã tồn tại cho bag này."
-          )
-        );
-        return;
-      }
-
-      await appendBagStorage({ bagLabel, vineIds: toWrite });
-
-      alert(tt("Saved successfully.", "Guardado con éxito.", "Lưu thành công."));
-      resetAll();
-    } catch (e) {
-      setError(e?.message || String(e));
-    } finally {
-      setBusy(false);
-      setStatus("");
+    if (!storageReady) {
+      setError("Storage settings missing. Open Bin Storage Settings and complete setup first.");
+      return;
     }
-  }
 
-  async function saveBinToBag() {
+    await resetFlow();
+
+    setStep("scanParent");
+    setStatus(mode === "bag" ? "Scan Bag label first." : "Scan Bin label first.");
+  };
+
+  const removeChild = (v) => setChildren((prev) => prev.filter((x) => x !== v));
+
+  const save = async () => {
+    if (isSaving) return;
+
     setError("");
     setStatus("");
 
-    if (!storageReady) return setError(t("storage_setup_missing"));
-    if (!binLabel) return setError(t("scan_bin_first"));
+    const p = String(parentLabel || "").trim();
+    if (!p) return setError("Missing parent label. Scan Bag/Bin first.");
+    if (children.length === 0) return setError("No scanned items yet.");
 
-    const bags = uniq(bagLabels);
-    if (!bags.length) return setError(tt("Scan at least 1 bag.", "Escanee al menos 1 bolsa.", "Quét ít nhất 1 bag."));
+    setIsSaving(true);
+    setStatus("Saving...");
 
-    setBusy(true);
-    setStatus(t("saving_to_sheet"));
     try {
-      if (direction === "in") {
-        // final validation: block bags already in another bin
-        const safe = [];
-        for (const b of bags) {
-          const r = await findBinForBagLabel({ bagLabel: b });
-          if (r.found && r.binLabel && r.binLabel !== binLabel) {
-            alert(`${tt("Bag already exists in bin", "La bolsa ya existe en el bin", "Bag đã tồn tại trong bin")}: ${r.binLabel}\n${b}`);
-            continue;
-          }
-          if (r.found && r.binLabel === binLabel) {
-            alert(
-              `${tt(
-                "Bag already exists in this bin",
-                "La bolsa ya existe en este bin",
-                "Bag đã tồn tại trong bin này"
-              )}: ${binLabel}\n${b}`
-            );
-            continue;
-          }
-          safe.push(b);
-        }
+      // stop camera during save
+      await stopScanner();
 
-        if (!safe.length) return;
-
-        await appendBinStorage({ binLabel, bagLabels: safe });
-        alert(tt("Saved successfully.", "Guardado con éxito.", "Lưu thành công."));
+      if (mode === "bag") {
+        await appendBagStorage({ bagLabel: p, vineIds: children });
+        setStatus("Saved Bag → Vines.");
       } else {
-        // OUT
-        const r = await removeBinStorageByBagLabels({ binLabel, bagLabels: bags });
-        if (r.notFound?.length) {
-          alert(`${tt("Not found:", "No encontrado:", "Không tìm thấy:")}\n${r.notFound.join("\n")}`);
-        }
-        alert(`${tt("Removed:", "Eliminado:", "Đã xóa:")} ${r.removed}`);
+        await appendBinStorage({ binLabel: p, bagLabels: children });
+        setStatus("Saved Bin → Bags.");
       }
 
-      resetAll();
+      // Return to default state with NO camera
+      setParentLabel("");
+      setChildren([]);
+      existingSetRef.current = new Set();
+      setExistingCount(0);
+      setStep("idle");
     } catch (e) {
-      setError(e?.message || String(e));
-    } finally {
-      setBusy(false);
       setStatus("");
+      setError(e.message || "Save failed.");
+      setStep("scanChildren");
+    } finally {
+      setIsSaving(false);
     }
-  }
+  };
 
-  if (!proxyUrl) return <div className="page">{t("please_go_setup_first")}</div>;
+  // ----------- Scanner lifecycle driven by step -----------
+  useEffect(() => {
+    let cancelled = false;
+
+    const run = async () => {
+      await stopScanner();
+
+      if (cancelled) return;
+
+      if (step === "scanParent") {
+        await startScanner("storage-parent-reader", async (label) => {
+          if (isSaving) return;
+
+          await stopScanner();
+          const p = String(label || "").trim();
+          setParentLabel(p);
+          setChildren([]);
+
+          setStatus("Loading existing records...");
+          setError("");
+
+          try {
+            const existing = await getExistingChildrenForParent({ mode, parentLabel: p });
+            const cleaned = uniq(existing);
+            existingSetRef.current = new Set(cleaned);
+            setExistingCount(cleaned.length);
+          } catch (e) {
+            existingSetRef.current = new Set();
+            setExistingCount(0);
+            setError(e.message || "Failed to load existing records. Duplicates will be blocked on Save.");
+          }
+
+          setStep("scanChildren");
+          setStatus(mode === "bag" ? "Now bulk scan Vine labels into this Bag." : "Now bulk scan Bag labels into this Bin.");
+        });
+      }
+
+      if (step === "scanChildren") {
+        await startScanner("storage-children-reader", (child) => {
+          if (isSaving) return;
+
+          const v = String(child || "").trim();
+          if (!v) return;
+
+          setChildren((prev) => {
+            if (prev.includes(v)) {
+              setStatus(`Duplicate ignored: "${v}" already scanned.`);
+              return prev;
+            }
+
+            if (existingSetRef.current.has(v)) {
+              setStatus(
+                mode === "bag"
+                  ? `Duplicate ignored: Bag "${parentLabel}" already contains vine "${v}".`
+                  : `Duplicate ignored: Bin "${parentLabel}" already contains bag "${v}".`
+              );
+              return prev;
+            }
+
+            return [...prev, v];
+          });
+        });
+      }
+    };
+
+    run();
+
+    return () => {
+      cancelled = true;
+    };
+    // Important: re-run when step changes OR when mode changes while scanning
+  }, [step, mode, isSaving, parentLabel]);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      stopScanner();
+    };
+  }, []);
+
+  if (!settings?.proxyUrl) return <div className="page">Please go to Setup first.</div>;
 
   return (
-    <div className="page" style={{ maxWidth: 1100 }}>
-      <h2>{t("tab_storage")}</h2>
+    <div className="page">
+      <h2>Bin Storage</h2>
 
-      {error && <div className="alert alert-error">{error}</div>}
-      {status && <div className="alert alert-ok">{status}</div>}
-
-      {/* Setup */}
-      <div className="card" style={{ marginBottom: 10 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
-          <div style={{ fontWeight: 800 }}>
-            {tt("Bin Storage Sheet Setup", "Configuración de Bin Storage", "Thiết lập Bin Storage")}
-          </div>
-          <button onClick={() => setSetupOpen((v) => !v)}>{setupOpen ? t("close") : t("storage_settings")}</button>
-        </div>
-
-        {setupOpen && (
-          <div style={{ marginTop: 12 }}>
-            {setupErr && <div className="alert alert-error">{setupErr}</div>}
-            {setupMsg && <div className="alert alert-ok">{setupMsg}</div>}
-
-            <label className="field">
-              {tt("Google Sheet link", "Enlace de Google Sheet", "Link Google Sheet")}
-              <input
-                value={storageUrl}
-                onChange={(e) => setStorageUrl(e.target.value)}
-                placeholder="https://docs.google.com/spreadsheets/d/..."
-              />
-            </label>
-
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-              <button onClick={loadTabs} disabled={tabsLoading}>
-                {tabsLoading ? t("loading") : t("load_tabs")}
-              </button>
-            </div>
-
-            {tabs.length > 0 && (
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 12 }}>
-                <label className="field">
-                  {tt("Bag scan tab", "Pestaña de bag scan", "Tab bag scan")}
-                  <select value={bagStorageSheetName} onChange={(e) => setBagStorageSheetName(e.target.value)}>
-                    <option value="">{tt("Select tab", "Seleccione", "Chọn tab")}</option>
-                    {tabs.map((x) => (
-                      <option key={x} value={x}>
-                        {x}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-
-                <label className="field">
-                  {tt("Bin scan tab", "Pestaña de bin scan", "Tab bin scan")}
-                  <select value={binStorageSheetName} onChange={(e) => setBinStorageSheetName(e.target.value)}>
-                    <option value="">{tt("Select tab", "Seleccione", "Chọn tab")}</option>
-                    {tabs.map((x) => (
-                      <option key={x} value={x}>
-                        {x}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              </div>
-            )}
-
-            <div style={{ marginTop: 12 }}>
-              <button onClick={saveStorageSetup}>{t("save_storage_setup")}</button>
-            </div>
-          </div>
-        )}
+      <div className="card" style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+        <button
+          onClick={() => {
+            setSetupOpen((v) => !v);
+            setSetupErr("");
+            setSetupMsg("");
+          }}
+        >
+          {setupOpen ? "Close Bin Storage Settings" : "Bin Storage Settings"}
+        </button>
       </div>
 
-      {/* Operation select */}
-      <div className="card" style={{ marginBottom: 10 }}>
-        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
-          <label className="field" style={{ margin: 0 }}>
-            <span style={{ fontWeight: 700 }}>{tt("Operation", "Operación", "Thao tác")}</span>
-            <select
-              value={op}
-              onChange={(e) => {
-                setOp(e.target.value);
-                resetAll();
-              }}
-            >
-              <option value="bagToVine">{tt("Bag → Vine", "Bolsa → Vid", "Bag → Vine")}</option>
-              <option value="binToBag">{tt("Bin → Bag", "Bin → Bolsa", "Bin → Bag")}</option>
-            </select>
+      {(setupOpen || !storageReady) && (
+        <div className="card" style={{ marginTop: 10 }}>
+          <h3>Bin Storage Sheet Setup</h3>
+
+          {setupErr && <div className="alert alert-error">{setupErr}</div>}
+          {setupMsg && <div className="alert alert-ok">{setupMsg}</div>}
+
+          <label className="field">
+            Google Sheet link (contains your storage tabs)
+            <input
+              value={storageUrl}
+              onChange={(e) => setStorageUrl(e.target.value)}
+              placeholder="https://docs.google.com/spreadsheets/d/..."
+            />
           </label>
 
-          {op === "binToBag" && (
-            <label className="field" style={{ margin: 0 }}>
-              <span style={{ fontWeight: 700 }}>{tt("Direction", "Dirección", "Hướng")}</span>
-              <select
-                value={direction}
-                onChange={(e) => {
-                  setDirection(e.target.value);
-                  setBagLabels([]);
-                }}
-              >
-                <option value="in">{t("in")}</option>
-                <option value="out">{t("out")}</option>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button className="primary" onClick={loadTabs} disabled={tabsLoading || !storageSpreadsheetId}>
+              {tabsLoading ? "Loading Tabs…" : "Load Tabs"}
+            </button>
+          </div>
+
+          <div className="grid" style={{ marginTop: 12 }}>
+            <label className="field">
+              Bag scan → write to tab
+              <select value={bagStorageSheetName} onChange={(e) => setBagStorageSheetName(e.target.value)}>
+                <option value="">-- Select tab --</option>
+                {tabs.map((t) => (
+                  <option key={t} value={t}>
+                    {t}
+                  </option>
+                ))}
               </select>
             </label>
-          )}
 
-          <button onClick={resetAll}>{t("reset")}</button>
+            <label className="field">
+              Bin scan → write to tab
+              <select value={binStorageSheetName} onChange={(e) => setBinStorageSheetName(e.target.value)}>
+                <option value="">-- Select tab --</option>
+                {tabs.map((t) => (
+                  <option key={t} value={t}>
+                    {t}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+
+          <button className="primary" onClick={saveStorageSetup} disabled={setupSaving}>
+            {setupSaving ? "Saving..." : "Save Bin Storage Setup"}
+          </button>
+
+          <div style={{ marginTop: 10, fontSize: 13, opacity: 0.8 }}>
+            Tip: Create tabs first in Google Sheets, then click “Load Tabs”, then choose where each scan mode writes.
+          </div>
         </div>
-      </div>
+      )}
 
-      {/* Scanner */}
-      <div className="card" style={{ marginBottom: 10 }}>
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-          {op === "bagToVine" ? (
-            <>
-              <button onClick={() => startScanner("bagLabel")} disabled={busy}>
-                {tt("Scan BAG label", "Escanear BAG", "Quét BAG")}
-              </button>
-              <button onClick={() => startScanner("vineIds")} disabled={busy}>
-                {tt("Bulk scan VINE labels", "Escaneo masivo VINE", "Quét nhiều VINE")}
-              </button>
-            </>
-          ) : (
-            <>
-              <button onClick={() => startScanner("binLabel")} disabled={busy}>
-                {tt("Scan BIN label", "Escanear BIN", "Quét BIN")}
-              </button>
-              <button onClick={() => startScanner("bagLabels")} disabled={busy}>
-                {direction === "in"
-                  ? tt("Bulk scan BAG labels", "Escaneo masivo BAG", "Quét nhiều BAG")
-                  : tt("Scan BAG labels to remove", "Escanear BAG para eliminar", "Quét BAG để xóa")}
-              </button>
-            </>
-          )}
-
-          <button onClick={stopScanner}>{tt("Stop scanner", "Detener escáner", "Dừng quét")}</button>
+      {(status || error) && (
+        <div className="card" style={{ marginTop: 10 }}>
+          {status && <div className="alert">{status}</div>}
+          {error && <div className="alert alert-error">{error}</div>}
         </div>
+      )}
 
-        <div style={{ marginTop: 12 }}>
-          <div id={scanBoxId} />
-        </div>
-      </div>
+      {step === "idle" && (
+        <div className="card">
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+            <button className={mode === "bag" ? "primary" : ""} onClick={() => setMode("bag")} disabled={isSaving}>
+              Bag → Vines
+            </button>
+            <button className={mode === "bin" ? "primary" : ""} onClick={() => setMode("bin")} disabled={isSaving}>
+              Bin → Bags
+            </button>
+          </div>
 
-      {/* Panels */}
-      <div className="card">
-        {op === "bagToVine" ? (
-          <>
-            <div style={{ fontWeight: 800, marginBottom: 10 }}>{tt("Bag → Vine", "Bolsa → Vid", "Bag → Vine")}</div>
-
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-              <div>
-                <div style={{ fontWeight: 700, marginBottom: 6 }}>{tt("Bag label", "Etiqueta de bolsa", "Mã bag")}</div>
-                <div style={{ padding: 8, border: "1px solid #ddd", borderRadius: 6, minHeight: 40 }}>
-                  {bagLabel || <span style={{ opacity: 0.6 }}>{tt("Not scanned yet", "Aún no escaneado", "Chưa quét")}</span>}
-                </div>
-
-                {existingVines.length > 0 && (
-                  <div style={{ marginTop: 10 }}>
-                    <div style={{ fontWeight: 700, marginBottom: 6 }}>{t("existing_records")}</div>
-                    <div style={{ maxHeight: 160, overflow: "auto", border: "1px solid #eee", borderRadius: 6, padding: 8 }}>
-                      {existingVines.map((x) => (
-                        <div key={x} style={{ fontFamily: "monospace" }}>{x}</div>
-                      ))}
-                    </div>
-                  </div>
-                )}
+          <div style={{ marginTop: 10 }}>
+            <p>Ready. Click Start Scanning.</p>
+            <button className="primary" onClick={begin} disabled={!storageReady || isSaving}>
+              Start Scanning
+            </button>
+            {!storageReady && (
+              <div style={{ marginTop: 10, fontSize: 13, opacity: 0.8 }}>
+                Please complete Bin Storage setup above first.
               </div>
+            )}
+          </div>
+        </div>
+      )}
 
-              <div>
-                <div style={{ fontWeight: 700, marginBottom: 6 }}>
-                  {tt("Scanned vine labels", "Vides escaneadas", "Vine đã quét")}
-                </div>
-                <div style={{ maxHeight: 260, overflow: "auto", border: "1px solid #eee", borderRadius: 6, padding: 8 }}>
-                  {vineIds.length === 0 ? (
-                    <div style={{ opacity: 0.7 }}>{tt("No scans yet.", "Sin escaneos.", "Chưa có quét.")}</div>
-                  ) : (
-                    vineIds.map((c) => (
-                      <div key={c} style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", padding: "4px 0" }}>
-                        <span style={{ fontFamily: "monospace", fontWeight: 700 }}>{c}</span>
-                        <button onClick={() => setVineIds((prev) => prev.filter((x) => x !== c))} style={{ padding: "2px 8px" }}>
-                          {t("remove")}
-                        </button>
-                      </div>
-                    ))
-                  )}
-                </div>
-              </div>
-            </div>
+      {step === "scanParent" && (
+        <div className="card">
+          <p>{mode === "bag" ? "Scan Bag Label" : "Scan Bin Label"}</p>
+          <div id="storage-parent-reader" />
+          <button style={{ marginTop: 10 }} onClick={resetFlow} disabled={isSaving}>
+            Cancel
+          </button>
+        </div>
+      )}
 
+      {step === "scanChildren" && (
+        <div className="card">
+          <div style={{ fontWeight: 800 }}>
+            Parent: <span style={{ fontWeight: 700 }}>{parentLabel}</span>
+          </div>
+
+          <p style={{ marginTop: 8 }}>
+            {mode === "bag" ? "Now scan vine labels (bulk)" : "Now scan bag labels (bulk)"}.
+            Scanned: <strong>{children.length}</strong>
+          </p>
+
+          <div style={{ marginTop: 6, fontSize: 13, opacity: 0.85 }}>
+            Existing already in sheet for this parent: <strong>{existingCount}</strong>
+          </div>
+
+          <div id="storage-children-reader" />
+
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
+            <button
+              onClick={() => {
+                if (isSaving) return;
+                setChildren([]);
+                setStatus("Cleared scans.");
+              }}
+              disabled={isSaving}
+            >
+              Clear Scans
+            </button>
+
+            <button className="primary" onClick={save} disabled={isSaving || !parentLabel || children.length === 0}>
+              {isSaving ? "Saving..." : "Save"}
+            </button>
+
+            <button onClick={resetFlow} disabled={isSaving}>
+              Cancel
+            </button>
+          </div>
+
+          {children.length > 0 && (
             <div style={{ marginTop: 12 }}>
-              <button onClick={saveBagToVine} disabled={busy || !bagLabel || vineIds.length === 0}>
-                {busy ? t("saving_to_sheet") : t("save_to_sheet")}
-              </button>
-            </div>
-          </>
-        ) : (
-          <>
-            <div style={{ fontWeight: 800, marginBottom: 10 }}>{tt("Bin → Bag", "Bin → Bolsa", "Bin → Bag")}</div>
-
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-              <div>
-                <div style={{ fontWeight: 700, marginBottom: 6 }}>{tt("Bin label", "Etiqueta de bin", "Mã bin")}</div>
-                <div style={{ padding: 8, border: "1px solid #ddd", borderRadius: 6, minHeight: 40 }}>
-                  {binLabel || <span style={{ opacity: 0.6 }}>{tt("Not scanned yet", "Aún no escaneado", "Chưa quét")}</span>}
-                </div>
-
-                {existingBags.length > 0 && (
-                  <div style={{ marginTop: 10 }}>
-                    <div style={{ fontWeight: 700, marginBottom: 6 }}>
-                      {tt("Existing bags in this bin", "Bolsas existentes en este bin", "Bag hiện có trong bin")}
-                    </div>
-                    <div style={{ maxHeight: 160, overflow: "auto", border: "1px solid #eee", borderRadius: 6, padding: 8 }}>
-                      {existingBags.map((x) => (
-                        <div key={x} style={{ fontFamily: "monospace" }}>{x}</div>
-                      ))}
-                    </div>
+              <div style={{ fontWeight: 800, marginBottom: 8 }}>Scanned</div>
+              <div
+                style={{
+                  maxHeight: 220,
+                  overflow: "auto",
+                  border: "1px solid #eee",
+                  borderRadius: 12,
+                  padding: 10,
+                  background: "#fafafa",
+                  display: "flex",
+                  flexWrap: "wrap",
+                  gap: 8,
+                }}
+              >
+                {children.map((v) => (
+                  <div
+                    key={v}
+                    style={{
+                      display: "flex",
+                      gap: 8,
+                      alignItems: "center",
+                      padding: "6px 10px",
+                      borderRadius: 999,
+                      border: "1px solid #ddd",
+                      background: "#fff",
+                    }}
+                  >
+                    <span style={{ fontWeight: 700 }}>{v}</span>
+                    <button onClick={() => removeChild(v)} style={{ padding: "2px 8px" }} disabled={isSaving}>
+                      Remove
+                    </button>
                   </div>
-                )}
-              </div>
-
-              <div>
-                <div style={{ fontWeight: 700, marginBottom: 6 }}>
-                  {direction === "in"
-                    ? tt("Scanned bag labels", "Bolsas escaneadas", "Bag đã quét")
-                    : tt("Bag labels to remove", "Bolsas a eliminar", "Bag cần xóa")}
-                </div>
-
-                <div style={{ maxHeight: 260, overflow: "auto", border: "1px solid #eee", borderRadius: 6, padding: 8 }}>
-                  {bagLabels.length === 0 ? (
-                    <div style={{ opacity: 0.7 }}>{tt("No scans yet.", "Sin escaneos.", "Chưa có quét.")}</div>
-                  ) : (
-                    bagLabels.map((c) => (
-                      <div key={c} style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", padding: "4px 0" }}>
-                        <span style={{ fontFamily: "monospace", fontWeight: 700 }}>{c}</span>
-                        <button onClick={() => setBagLabels((prev) => prev.filter((x) => x !== c))} style={{ padding: "2px 8px" }}>
-                          {t("remove")}
-                        </button>
-                      </div>
-                    ))
-                  )}
-                </div>
+                ))}
               </div>
             </div>
-
-            <div style={{ marginTop: 12 }}>
-              <button onClick={saveBinToBag} disabled={busy || !binLabel || bagLabels.length === 0}>
-                {busy ? t("saving_to_sheet") : t("save_to_sheet")}
-              </button>
-            </div>
-          </>
-        )}
-      </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
