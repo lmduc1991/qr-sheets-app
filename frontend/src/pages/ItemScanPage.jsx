@@ -3,7 +3,6 @@ import { useEffect, useRef, useState } from "react";
 import { Html5QrcodeScanner } from "html5-qrcode";
 import { loadSettings, onSettingsChange } from "../store/settingsStore";
 import { getItemByKey, updateItemByKey } from "../api/sheetsApi";
-import { useT } from "../i18n";
 
 function PrettyDetails({ item, preferredOrder = [] }) {
   if (!item) return null;
@@ -43,8 +42,7 @@ function PrettyDetails({ item, preferredOrder = [] }) {
 }
 
 export default function ItemScanPage() {
-  const { t } = useT();
-
+  // Reactive settings
   const [settings, setSettings] = useState(() => loadSettings());
   useEffect(() => onSettingsChange(setSettings), []);
 
@@ -54,14 +52,14 @@ export default function ItemScanPage() {
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
 
-  const [scanning, setScanning] = useState(false);
-
   const [scannedKey, setScannedKey] = useState("");
   const [headers, setHeaders] = useState([]);
   const [item, setItem] = useState(null);
 
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState({});
+
+  const [isScanning, setIsScanning] = useState(false);
 
   const scannerRef = useRef(null);
 
@@ -72,9 +70,7 @@ export default function ItemScanPage() {
       } catch {}
       scannerRef.current = null;
     }
-    const el = document.getElementById("item-scan-reader");
-    if (el) el.innerHTML = "";
-    setScanning(false);
+    setIsScanning(false);
   };
 
   const startScanner = () => {
@@ -83,32 +79,42 @@ export default function ItemScanPage() {
     setError("");
     setStatus("");
 
-    const el = document.getElementById("item-scan-reader");
-    if (el) el.innerHTML = "";
+    // Ensure scanner container exists (it is always mounted below now)
+    setIsScanning(true);
 
-    const qrbox = Math.min(340, Math.floor(window.innerWidth * 0.8));
-    const scanner = new Html5QrcodeScanner(
-      "item-scan-reader",
-      { fps: 15, qrbox, experimentalFeatures: { useBarCodeDetectorIfSupported: true } },
-      false
-    );
+    // Next tick: safe to render scanner into the container
+    setTimeout(() => {
+      const el = document.getElementById("item-scan-reader");
+      if (!el) {
+        setError("Scanner container not ready.");
+        setIsScanning(false);
+        return;
+      }
+      el.innerHTML = "";
 
-    scanner.render(
-      async (decodedText) => {
-        const key = String(decodedText || "").trim();
-        if (!key) return;
-        await stopScanner();
-        await loadItem(key);
-      },
-      () => {}
-    );
+      const qrbox = Math.min(340, Math.floor(window.innerWidth * 0.8));
+      const scanner = new Html5QrcodeScanner(
+        "item-scan-reader",
+        { fps: 15, qrbox, experimentalFeatures: { useBarCodeDetectorIfSupported: true } },
+        false
+      );
 
-    scannerRef.current = scanner;
-    setScanning(true);
+      scanner.render(
+        async (decodedText) => {
+          const key = String(decodedText || "").trim();
+          if (!key) return;
+          await stopScanner();
+          await loadItem(key);
+        },
+        () => {}
+      );
+
+      scannerRef.current = scanner;
+    }, 0);
   };
 
   const loadItem = async (key) => {
-    setStatus(t("status_loading_item"));
+    setStatus("Loading item...");
     setError("");
     setEditing(false);
     setItem(null);
@@ -120,22 +126,23 @@ export default function ItemScanPage() {
       setHeaders(r.headers || []);
       if (!r.found) {
         setStatus("");
-        setError(`${t("err_item_not_found_in")} ${itemsSheetName || "Items sheet"}.`);
+        setError(`Item not found in ${itemsSheetName || "Items sheet"}.`);
         return;
       }
       setItem(r.item);
       setForm(r.item);
-      setStatus(t("status_item_loaded"));
+      setStatus("Item loaded.");
     } catch (e) {
       setStatus("");
-      setError(e.message || t("err_failed_load_item"));
+      setError(e.message || "Failed to load item.");
     }
   };
 
   const save = async () => {
     setError("");
-    setStatus(t("status_saving"));
+    setStatus("Saving...");
     try {
+      // patch excludes Key column
       const patch = {};
       (headers || []).forEach((h) => {
         if (!h) return;
@@ -144,16 +151,16 @@ export default function ItemScanPage() {
       });
 
       const r = await updateItemByKey(scannedKey, patch);
-      setStatus(`${t("status_saved_updated_fields")} ${r.updated ?? 0}`);
+      setStatus(`Saved. Updated fields: ${r.updated ?? 0}`);
       setEditing(false);
       setItem((prev) => ({ ...(prev || {}), ...patch }));
     } catch (e) {
       setStatus("");
-      setError(e.message || t("err_save_failed"));
+      setError(e.message || "Save failed.");
     }
   };
 
-  const resetToScan = async () => {
+  const scanAnother = async () => {
     setItem(null);
     setScannedKey("");
     setHeaders([]);
@@ -161,19 +168,24 @@ export default function ItemScanPage() {
     setEditing(false);
     setStatus("");
     setError("");
+
+    // Return to WAIT state (do not auto-start)
     await stopScanner();
   };
 
+  // Cleanup on unmount
   useEffect(() => {
-    return () => stopScanner();
+    return () => {
+      stopScanner();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  if (!settings?.proxyUrl) return <div>{t("please_go_setup_first")}</div>;
+  if (!settings?.proxyUrl) return <div>Please go to Setup first.</div>;
 
   return (
     <div className="card">
-      <h3>{t("scan_title")}</h3>
+      <h3>Scan</h3>
 
       {status && <div className="alert">{status}</div>}
       {error && <div className="alert alert-error">{error}</div>}
@@ -181,28 +193,31 @@ export default function ItemScanPage() {
       {!item && (
         <>
           <p>
-            {t("scan_hint_keycol")} <strong>{keyColumn}</strong>
+            Scan QR from your Key Column: <strong>{keyColumn}</strong>
             {itemsSheetName ? (
               <>
                 {" "}
-                ({t("items_tab_label")} <strong>{itemsSheetName}</strong>)
+                (Items tab: <strong>{itemsSheetName}</strong>)
               </>
             ) : null}
           </p>
 
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
-            {!scanning ? (
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+            {!isScanning ? (
               <button className="primary" onClick={startScanner}>
-                {t("start")}
+                Start Scanning
               </button>
             ) : (
-              <button onClick={stopScanner}>{t("stop")}</button>
+              <button style={{ marginTop: 10 }} onClick={stopScanner}>
+                Stop
+              </button>
             )}
-
-            <button onClick={resetToScan}>{t("reset")}</button>
           </div>
 
-          <div id="item-scan-reader" />
+          {/* IMPORTANT: always mounted so Html5QrcodeScanner can render reliably */}
+          <div style={{ marginTop: 10, display: isScanning ? "block" : "none" }}>
+            <div id="item-scan-reader" />
+          </div>
         </>
       )}
 
@@ -210,29 +225,20 @@ export default function ItemScanPage() {
         <>
           <div style={{ marginBottom: 10 }}>
             <div>
-              <strong>{t("key_label")}</strong> {scannedKey}
+              <strong>Key:</strong> {scannedKey}
             </div>
 
             <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
               <button className="primary" onClick={() => setEditing((v) => !v)}>
-                {editing ? t("cancel_edit") : t("edit")}
+                {editing ? "Cancel Edit" : "Edit"}
               </button>
-              <button
-                onClick={async () => {
-                  await resetToScan();
-                  startScanner();
-                }}
-              >
-                {t("scan_another")}
-              </button>
+              <button onClick={scanAnother}>Scan Another</button>
             </div>
           </div>
 
           {editing ? (
             <>
-              <p>
-                {t("edit_all_except_key")} ({keyColumn}).
-              </p>
+              <p>Edit all columns except Key ID ({keyColumn}).</p>
               <div className="grid">
                 {headers
                   .filter((h) => h && h !== keyColumn)
@@ -247,12 +253,12 @@ export default function ItemScanPage() {
                   ))}
               </div>
               <button className="primary" onClick={save}>
-                {t("save")}
+                Save
               </button>
             </>
           ) : (
             <div style={{ marginTop: 10 }}>
-              <h4 style={{ margin: "0 0 10px 0" }}>{t("item_details")}</h4>
+              <h4 style={{ margin: "0 0 10px 0" }}>Item details</h4>
               <PrettyDetails item={item} preferredOrder={headers} />
             </div>
           )}
