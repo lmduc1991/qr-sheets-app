@@ -59,6 +59,8 @@ export default function ItemScanPage() {
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState({});
 
+  const [isSaving, setIsSaving] = useState(false);
+
   const [isScanning, setIsScanning] = useState(false);
 
   const scannerRef = useRef(null);
@@ -79,38 +81,28 @@ export default function ItemScanPage() {
     setError("");
     setStatus("");
 
-    // Ensure scanner container exists (it is always mounted below now)
+    const el = document.getElementById("item-scan-reader");
+    if (el) el.innerHTML = ""; // reset scanner DOM
+
+    const qrbox = Math.min(340, Math.floor(window.innerWidth * 0.8));
+    const scanner = new Html5QrcodeScanner(
+      "item-scan-reader",
+      { fps: 15, qrbox, experimentalFeatures: { useBarCodeDetectorIfSupported: true } },
+      false
+    );
+
+    scanner.render(
+      async (decodedText) => {
+        const key = String(decodedText || "").trim();
+        if (!key) return;
+        await stopScanner();
+        await loadItem(key);
+      },
+      () => {}
+    );
+
+    scannerRef.current = scanner;
     setIsScanning(true);
-
-    // Next tick: safe to render scanner into the container
-    setTimeout(() => {
-      const el = document.getElementById("item-scan-reader");
-      if (!el) {
-        setError("Scanner container not ready.");
-        setIsScanning(false);
-        return;
-      }
-      el.innerHTML = "";
-
-      const qrbox = Math.min(340, Math.floor(window.innerWidth * 0.8));
-      const scanner = new Html5QrcodeScanner(
-        "item-scan-reader",
-        { fps: 15, qrbox, experimentalFeatures: { useBarCodeDetectorIfSupported: true } },
-        false
-      );
-
-      scanner.render(
-        async (decodedText) => {
-          const key = String(decodedText || "").trim();
-          if (!key) return;
-          await stopScanner();
-          await loadItem(key);
-        },
-        () => {}
-      );
-
-      scannerRef.current = scanner;
-    }, 0);
   };
 
   const loadItem = async (key) => {
@@ -139,8 +131,11 @@ export default function ItemScanPage() {
   };
 
   const save = async () => {
+    if (isSaving) return;
     setError("");
     setStatus("Saving...");
+    setIsSaving(true);
+
     try {
       // patch excludes Key column
       const patch = {};
@@ -157,6 +152,8 @@ export default function ItemScanPage() {
     } catch (e) {
       setStatus("");
       setError(e.message || "Save failed.");
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -202,22 +199,20 @@ export default function ItemScanPage() {
             ) : null}
           </p>
 
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-            {!isScanning ? (
+          {!isScanning ? (
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
               <button className="primary" onClick={startScanner}>
                 Start Scanning
               </button>
-            ) : (
+            </div>
+          ) : (
+            <>
+              <div id="item-scan-reader" />
               <button style={{ marginTop: 10 }} onClick={stopScanner}>
                 Stop
               </button>
-            )}
-          </div>
-
-          {/* IMPORTANT: always mounted so Html5QrcodeScanner can render reliably */}
-          <div style={{ marginTop: 10, display: isScanning ? "block" : "none" }}>
-            <div id="item-scan-reader" />
-          </div>
+            </>
+          )}
         </>
       )}
 
@@ -232,7 +227,9 @@ export default function ItemScanPage() {
               <button className="primary" onClick={() => setEditing((v) => !v)}>
                 {editing ? "Cancel Edit" : "Edit"}
               </button>
-              <button onClick={scanAnother}>Scan Another</button>
+              <button onClick={scanAnother} disabled={isSaving}>
+                Scan Another
+              </button>
             </div>
           </div>
 
@@ -248,12 +245,14 @@ export default function ItemScanPage() {
                       <input
                         value={form[h] ?? ""}
                         onChange={(e) => setForm((prev) => ({ ...prev, [h]: e.target.value }))}
+                        disabled={isSaving}
                       />
                     </label>
                   ))}
               </div>
-              <button className="primary" onClick={save}>
-                Save
+
+              <button className="primary" onClick={save} disabled={isSaving}>
+                {isSaving ? "Saving..." : "Save"}
               </button>
             </>
           ) : (
