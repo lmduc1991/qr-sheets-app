@@ -1,6 +1,5 @@
 import { NavLink, Routes, Route, Navigate } from "react-router-dom";
 import { useEffect, useState } from "react";
-import netlifyIdentity from "netlify-identity-widget";
 import "./App.css";
 
 import SetupPage from "./pages/SetupPage";
@@ -10,9 +9,7 @@ import BinStoragePage from "./pages/BinStoragePage";
 import { loadSettings, onSettingsChange } from "./store/settingsStore";
 
 export default function App() {
-  // ---------------------------
   // Existing settings logic
-  // ---------------------------
   const [settings, setSettings] = useState(() => loadSettings());
   const hasSetup = !!settings?.proxyUrl;
 
@@ -20,44 +17,7 @@ export default function App() {
     return onSettingsChange((s) => setSettings(s));
   }, []);
 
-  // ---------------------------
-  // Netlify Identity logic
-  // ---------------------------
-  const [user, setUser] = useState(() => netlifyIdentity.currentUser());
-
-  useEffect(() => {
-    netlifyIdentity.on("login", (u) => setUser(u));
-    netlifyIdentity.on("logout", () => setUser(null));
-
-    return () => {
-      netlifyIdentity.off("login");
-      netlifyIdentity.off("logout");
-    };
-  }, []);
-
-  // ---------------------------
-  // If NOT logged in → block app
-  // ---------------------------
-  if (!user) {
-    return (
-      <div className="app-layout">
-        <header className="app-header">
-          <div className="app-title">QR Sheets App</div>
-          <button onClick={() => netlifyIdentity.open("login")} className="login-btn">
-            Login
-          </button>
-        </header>
-
-        <main className="app-main">
-          <p>Please log in to use this application.</p>
-        </main>
-      </div>
-    );
-  }
-
-  // ---------------------------
-  // Logged-in app
-  // ---------------------------
+  // No auth gating. App is accessible immediately.
   return (
     <div className="app-layout">
       <header className="app-header">
@@ -80,13 +40,6 @@ export default function App() {
             Setup
           </NavLink>
         </nav>
-
-        <div className="login-status">
-          <span className="login-email">{user.email}</span>
-          <button onClick={() => netlifyIdentity.logout()} className="logout-btn">
-            Logout
-          </button>
-        </div>
       </header>
 
       <main className="app-main">
