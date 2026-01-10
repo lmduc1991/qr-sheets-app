@@ -5,10 +5,9 @@ import { Capacitor } from "@capacitor/core";
 import { ScopedStorage } from "@daniele-rolli/capacitor-scoped-storage";
 import { clearAllPhotos } from "../store/harvestStore";
 import { loadSettings, saveSettings } from "../store/settingsStore";
-import { useT } from "../i18n";
 
 const PHOTOS_KEY = "qr_harvest_photos_v1";
-const EXPORT_FOLDER_KEY = "exportFolder";
+const EXPORT_FOLDER_KEY = "exportFolder"; // stored inside settings
 
 function safeParse(raw) {
   try {
@@ -29,13 +28,14 @@ function splitDataUrl(dataUrl) {
 
 function getSavedFolder() {
   const s = loadSettings() || {};
-  return s[EXPORT_FOLDER_KEY] || null;
+  return s[EXPORT_FOLDER_KEY] || null; // { id, name }
 }
 
 function setSavedFolder(folder) {
   saveSettings({ [EXPORT_FOLDER_KEY]: folder });
 }
 
+// bytes -> base64 (safe for large files)
 function uint8ToBase64(u8) {
   let binary = "";
   const chunk = 0x8000;
@@ -46,14 +46,14 @@ function uint8ToBase64(u8) {
 }
 
 export default function ExportHarvestZipButton() {
-  const { t } = useT();
-
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
   const [savedUri, setSavedUri] = useState("");
   const [isBusy, setIsBusy] = useState(false);
 
   const [folder, setFolder] = useState(() => getSavedFolder());
+
+  // Confirmation modal state
   const [showConfirm, setShowConfirm] = useState(false);
 
   const isNative = useMemo(() => Capacitor.isNativePlatform(), []);
@@ -65,26 +65,29 @@ export default function ExportHarvestZipButton() {
 
     try {
       const res = await ScopedStorage.pickFolder();
-      if (!res?.folder?.id) throw new Error(t("no_folder_selected"));
+      if (!res?.folder?.id) throw new Error("No folder selected.");
       setSavedFolder(res.folder);
       setFolder(res.folder);
-      setStatus(`${t("export_folder_set_to")} ${res.folder.name || "Selected folder"}`);
+      setStatus(`Export folder set to: ${res.folder.name || "Selected folder"}`);
     } catch (e) {
-      setError(e?.message || t("failed_choose_folder"));
+      setError(e?.message || "Failed to choose folder.");
     }
   };
 
-  const promptDeleteAfterExport = () => setShowConfirm(true);
+  // Called ONLY after successful export
+  const promptDeleteAfterExport = () => {
+    setShowConfirm(true);
+  };
 
   const doDelete = () => {
     clearAllPhotos();
     setShowConfirm(false);
-    setStatus(t("photos_deleted"));
+    setStatus("Exported ZIP successfully. Photos deleted from this device.");
   };
 
   const keepForLater = () => {
     setShowConfirm(false);
-    setStatus(t("photos_kept"));
+    setStatus("Exported ZIP successfully. Photos kept on this device.");
   };
 
   const exportZip = async () => {
@@ -96,11 +99,11 @@ export default function ExportHarvestZipButton() {
     try {
       const data = safeParse(localStorage.getItem(PHOTOS_KEY));
       const itemKeys = Object.keys(data || {});
-      if (itemKeys.length === 0) throw new Error(t("no_harvest_photos_found"));
+      if (itemKeys.length === 0) throw new Error("No harvest photos found on this device.");
 
       let totalPhotos = 0;
       for (const k of itemKeys) totalPhotos += (data[k] || []).length;
-      if (totalPhotos === 0) throw new Error(t("no_harvest_photos_found"));
+      if (totalPhotos === 0) throw new Error("No harvest photos found on this device.");
 
       const zip = new JSZip();
 
@@ -111,9 +114,17 @@ export default function ExportHarvestZipButton() {
           if (!parsed) continue;
 
           const ext =
-            parsed.mime === "image/png" ? "png" : parsed.mime === "image/webp" ? "webp" : "jpg";
+            parsed.mime === "image/png"
+              ? "png"
+              : parsed.mime === "image/webp"
+              ? "webp"
+              : "jpg";
 
-          zip.file(`${itemKey}/photo_${String(i + 1).padStart(3, "0")}.${ext}`, parsed.base64, { base64: true });
+          zip.file(
+            `${itemKey}/photo_${String(i + 1).padStart(3, "0")}.${ext}`,
+            parsed.base64,
+            { base64: true }
+          );
         }
       }
 
@@ -121,32 +132,39 @@ export default function ExportHarvestZipButton() {
       let filename = `harvest_photos_${ts}.zip`;
       if (!filename.toLowerCase().endsWith(".zip")) filename += ".zip";
 
+      // ---------- WEB EXPORT ----------
       if (!isNative) {
-        setStatus(t("exporting"));
+        setStatus("Exporting ZIP…");
         const blob = await zip.generateAsync({ type: "blob" });
         saveAs(blob, filename);
-        setStatus(t("exported_zip_success"));
+
+        setStatus("Exported ZIP successfully.");
         promptDeleteAfterExport();
         return;
       }
 
+      // ---------- NATIVE EXPORT (Capacitor) ----------
       if (!folder?.id) {
-        setError(t("no_folder_selected"));
+        setError("No export folder selected. Tap “Choose Export Folder” first and pick Downloads.");
         return;
       }
 
-      setStatus(t("creating_zip"));
+      setStatus("Creating ZIP…");
+
+      // Generate ZIP as bytes then base64 (reliable across devices)
       const zipBytes = await zip.generateAsync({ type: "uint8array" });
       const base64Zip = uint8ToBase64(zipBytes);
 
       const exportDir = "HarvestExports";
       try {
         await ScopedStorage.mkdir({ folder, path: exportDir, recursive: true });
-      } catch {}
+      } catch {
+        // ignore
+      }
 
       const relPath = `${exportDir}/${filename}`;
 
-      setStatus(t("saving_zip"));
+      setStatus("Saving ZIP to selected folder…");
 
       await ScopedStorage.writeFile({
         folder,
@@ -159,7 +177,7 @@ export default function ExportHarvestZipButton() {
       const uriRes = await ScopedStorage.getUriForPath({ folder, path: relPath });
       setSavedUri(uriRes?.uri || "");
 
-      setStatus(t("exported_zip_success"));
+      setStatus("Exported ZIP successfully.");
       promptDeleteAfterExport();
     } catch (e) {
       setStatus("");
@@ -173,18 +191,18 @@ export default function ExportHarvestZipButton() {
     <div style={{ display: "grid", gap: 8 }}>
       {isNative && (
         <button onClick={chooseFolder} disabled={isBusy || showConfirm}>
-          {t("choose_export_folder")}
+          Choose Export Folder (pick Downloads for USB)
         </button>
       )}
 
       {isNative && folder?.id && (
         <div className="alert" style={{ wordBreak: "break-word" }}>
-          <strong>{t("export_folder_label")}</strong> {folder?.name || "Selected folder"}
+          <strong>Export folder:</strong> {folder?.name || "Selected folder"}
         </div>
       )}
 
       <button onClick={exportZip} disabled={isBusy || showConfirm}>
-        {isBusy ? t("exporting") : t("export_harvest_zip")}
+        {isBusy ? "Exporting…" : "Export Harvest Photos (ZIP)"}
       </button>
 
       {status && <div className="alert">{status}</div>}
@@ -192,11 +210,14 @@ export default function ExportHarvestZipButton() {
 
       {savedUri && (
         <div className="alert" style={{ wordBreak: "break-word" }}>
-          <strong>{t("saved_uri")}</strong> {savedUri}
-          <div style={{ marginTop: 6, fontSize: 12, opacity: 0.85 }}>{t("usb_copy_help")}</div>
+          <strong>Saved URI:</strong> {savedUri}
+          <div style={{ marginTop: 6, fontSize: 12, opacity: 0.85 }}>
+            USB copy: connect phone → open the folder you selected (Downloads/Documents) → HarvestExports → copy the ZIP.
+          </div>
         </div>
       )}
 
+      {/* Custom confirm modal (Yes / No) */}
       {showConfirm && (
         <div
           style={{
@@ -223,18 +244,18 @@ export default function ExportHarvestZipButton() {
               border: "1px solid #e6e6e6",
             }}
           >
-            <div style={{ fontWeight: 800, marginBottom: 10 }}>{t("delete_photos_now")}</div>
+            <div style={{ fontWeight: 800, marginBottom: 10 }}>Delete photos now?</div>
 
             <div style={{ fontSize: 14, lineHeight: 1.4, marginBottom: 16 }}>
-              {t("export_completed_success")}
+              Export completed successfully.
               <br />
-              <strong>{t("delete_all_stored_photos")}</strong>
+              Do you want to delete <strong>all stored harvest photos</strong> from this device?
             </div>
 
             <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", flexWrap: "wrap" }}>
-              <button onClick={keepForLater}>{t("no_keep_for_later")}</button>
+              <button onClick={keepForLater}>No, keep for later</button>
               <button className="primary" onClick={doDelete}>
-                {t("yes_delete")}
+                Yes, delete
               </button>
             </div>
           </div>
