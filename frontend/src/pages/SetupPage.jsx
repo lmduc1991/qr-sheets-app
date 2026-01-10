@@ -4,8 +4,12 @@ import { loadSettings, saveSettings, clearSettings, onSettingsChange } from "../
 import { getHeaders } from "../api/sheetsApi";
 import { useT } from "../i18n";
 
+// FIX: support both:
+//  - /spreadsheets/d/<ID>
+//  - /spreadsheets/u/0/d/<ID>
 function extractSpreadsheetId(url) {
-  const m = String(url || "").match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
+  const s = String(url || "").trim();
+  const m = s.match(/\/spreadsheets\/(?:u\/\d+\/)?d\/([a-zA-Z0-9-_]+)/);
   return m ? m[1] : "";
 }
 
@@ -172,9 +176,7 @@ export default function SetupPage() {
       </div>
 
       <div className="card">
-        <div style={{ fontSize: 13, opacity: 0.8 }}>
-          {t("harvest_setup_note")}
-        </div>
+        <div style={{ fontSize: 13, opacity: 0.8 }}>{t("harvest_setup_note")}</div>
       </div>
 
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
