@@ -18,17 +18,6 @@ function uniq(arr) {
   return Array.from(new Set((arr || []).map((x) => String(x || "").trim()).filter(Boolean)));
 }
 
-// Small helper: wait for a DOM element to exist (removes race conditions)
-async function waitForEl(id, tries = 25, delayMs = 40) {
-  for (let i = 0; i < tries; i++) {
-    const el = document.getElementById(id);
-    if (el) return el;
-    // eslint-disable-next-line no-await-in-loop
-    await new Promise((r) => setTimeout(r, delayMs));
-  }
-  return null;
-}
-
 export default function BinStoragePage() {
   // Reactive settings
   const [settings, setSettings] = useState(() => loadSettings());
@@ -133,6 +122,14 @@ export default function BinStoragePage() {
   const [isSaving, setIsSaving] = useState(false);
 
   const scannerRef = useRef(null);
+  const scanLockRef = useRef(false);
+
+  const popup = (msg) => {
+    // Same behavior as Harvest Management (requires OK)
+    try {
+      alert(String(msg || ""));
+    } catch {}
+  };
 
   const stopScanner = async () => {
     if (scannerRef.current) {
@@ -143,15 +140,11 @@ export default function BinStoragePage() {
     }
   };
 
-  const startScanner = async (domId, onScan) => {
+  const startScanner = (domId, onScan) => {
     if (scannerRef.current) return;
 
-    const el = await waitForEl(domId);
-    if (!el) {
-      setError("Scanner UI not ready. Please try again.");
-      return;
-    }
-    el.innerHTML = "";
+    const el = document.getElementById(domId);
+    if (el) el.innerHTML = "";
 
     const qrbox = Math.min(340, Math.floor(window.innerWidth * 0.8));
     const scanner = new Html5QrcodeScanner(
@@ -164,7 +157,18 @@ export default function BinStoragePage() {
       async (decodedText) => {
         const v = String(decodedText || "").trim();
         if (!v) return;
-        onScan(v);
+
+        // Prevent double fires / auto re-registering the same QR
+        if (scanLockRef.current) return;
+        scanLockRef.current = true;
+
+        try {
+          await Promise.resolve(onScan(v));
+        } finally {
+          setTimeout(() => {
+            scanLockRef.current = false;
+          }, 600);
+        }
       },
       () => {}
     );
@@ -198,6 +202,64 @@ export default function BinStoragePage() {
 
     setStep("scanParent");
     setStatus(mode === "bag" ? "Scan Bag label first." : "Scan Bin label first.");
+
+    setTimeout(() => {
+      startScanner("storage-parent-reader", async (label) => {
+        if (isSaving) return;
+
+        await stopScanner();
+
+        const p = String(label || "").trim();
+        setParentLabel(p);
+        setChildren([]);
+
+        setStatus("Loading existing records...");
+        setError("");
+
+        try {
+          const existing = await getExistingChildrenForParent({ mode, parentLabel: p });
+          const cleaned = uniq(existing);
+          existingSetRef.current = new Set(cleaned);
+          setExistingCount(cleaned.length);
+        } catch (e) {
+          existingSetRef.current = new Set();
+          setExistingCount(0);
+          setError(e.message || "Failed to load existing records. Duplicates will be blocked on Save.");
+        }
+
+        setStep("scanChildren");
+        setStatus(mode === "bag" ? "Now bulk scan Vine labels into this Bag." : "Now bulk scan Bag labels into this Bin.");
+
+        setTimeout(() => {
+          startScanner("storage-children-reader", (child) => {
+            if (isSaving) return;
+
+            const v = String(child || "").trim();
+            if (!v) return;
+
+            setChildren((prev) => {
+              if (prev.includes(v)) {
+                popup(`Duplicate ignored: "${v}" already scanned.`);
+                setStatus(`Duplicate ignored: "${v}" already scanned.`);
+                return prev;
+              }
+
+              if (existingSetRef.current.has(v)) {
+                const msg =
+                  mode === "bag"
+                    ? `Duplicate ignored: Bag "${parentLabel}" already contains vine "${v}".`
+                    : `Duplicate ignored: Bin "${parentLabel}" already contains bag "${v}".`;
+                popup(msg);
+                setStatus(msg);
+                return prev;
+              }
+
+              return [...prev, v];
+            });
+          });
+        }, 120);
+      });
+    }, 120);
   };
 
   const removeChild = (v) => setChildren((prev) => prev.filter((x) => x !== v));
@@ -216,7 +278,6 @@ export default function BinStoragePage() {
     setStatus("Saving...");
 
     try {
-      // stop camera during save
       await stopScanner();
 
       if (mode === "bag") {
@@ -227,13 +288,13 @@ export default function BinStoragePage() {
         setStatus("Saved Bin → Bags.");
       }
 
-      // Return to default state with NO camera
       setParentLabel("");
       setChildren([]);
       existingSetRef.current = new Set();
       setExistingCount(0);
       setStep("idle");
     } catch (e) {
+      popup(e?.message || "Save failed.");
       setStatus("");
       setError(e.message || "Save failed.");
       setStep("scanChildren");
@@ -241,86 +302,6 @@ export default function BinStoragePage() {
       setIsSaving(false);
     }
   };
-
-  // ----------- Scanner lifecycle driven by step -----------
-  useEffect(() => {
-    let cancelled = false;
-
-    const run = async () => {
-      await stopScanner();
-
-      if (cancelled) return;
-
-      if (step === "scanParent") {
-        await startScanner("storage-parent-reader", async (label) => {
-          if (isSaving) return;
-
-          await stopScanner();
-          const p = String(label || "").trim();
-          setParentLabel(p);
-          setChildren([]);
-
-          setStatus("Loading existing records...");
-          setError("");
-
-          try {
-            const existing = await getExistingChildrenForParent({ mode, parentLabel: p });
-            const cleaned = uniq(existing);
-            existingSetRef.current = new Set(cleaned);
-            setExistingCount(cleaned.length);
-          } catch (e) {
-            existingSetRef.current = new Set();
-            setExistingCount(0);
-            setError(e.message || "Failed to load existing records. Duplicates will be blocked on Save.");
-          }
-
-          setStep("scanChildren");
-          setStatus(mode === "bag" ? "Now bulk scan Vine labels into this Bag." : "Now bulk scan Bag labels into this Bin.");
-        });
-      }
-
-      if (step === "scanChildren") {
-        await startScanner("storage-children-reader", (child) => {
-          if (isSaving) return;
-
-          const v = String(child || "").trim();
-          if (!v) return;
-
-          setChildren((prev) => {
-            if (prev.includes(v)) {
-              setStatus(`Duplicate ignored: "${v}" already scanned.`);
-              return prev;
-            }
-
-            if (existingSetRef.current.has(v)) {
-              setStatus(
-                mode === "bag"
-                  ? `Duplicate ignored: Bag "${parentLabel}" already contains vine "${v}".`
-                  : `Duplicate ignored: Bin "${parentLabel}" already contains bag "${v}".`
-              );
-              return prev;
-            }
-
-            return [...prev, v];
-          });
-        });
-      }
-    };
-
-    run();
-
-    return () => {
-      cancelled = true;
-    };
-    // Important: re-run when step changes OR when mode changes while scanning
-  }, [step, mode, isSaving, parentLabel]);
-
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      stopScanner();
-    };
-  }, []);
 
   if (!settings?.proxyUrl) return <div className="page">Please go to Setup first.</div>;
 
