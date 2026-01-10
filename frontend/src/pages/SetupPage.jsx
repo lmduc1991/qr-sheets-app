@@ -1,38 +1,16 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { loadSettings, saveSettings, clearSettings, onSettingsChange } from "../store/settingsStore";
+import { loadSettings, saveSettings, clearSettings } from "../store/settingsStore";
 import { getHeaders } from "../api/sheetsApi";
-import { useT } from "../i18n";
 
-// FIX: support both:
-//  - /spreadsheets/d/<ID>
-//  - /spreadsheets/u/0/d/<ID>
 function extractSpreadsheetId(url) {
-  const s = String(url || "").trim();
-  const m = s.match(/\/spreadsheets\/(?:u\/\d+\/)?d\/([a-zA-Z0-9-_]+)/);
+  const m = String(url || "").match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
   return m ? m[1] : "";
 }
 
 export default function SetupPage() {
-  const { t } = useT();
   const nav = useNavigate();
-
   const existing = useMemo(() => loadSettings(), []);
-  const [settings, setSettings] = useState(() => loadSettings());
-  useEffect(() => onSettingsChange(setSettings), []);
-
-  const [language, setLanguage] = useState(existing?.language || "en");
-
-  useEffect(() => {
-    if (settings?.language && settings.language !== language) setLanguage(settings.language);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [settings?.language]);
-
-  const applyLanguage = (val) => {
-    const v = String(val || "en").trim() || "en";
-    setLanguage(v);
-    saveSettings({ language: v }); // immediate
-  };
 
   const [proxyUrl, setProxyUrl] = useState(existing?.proxyUrl || "");
 
@@ -52,9 +30,9 @@ export default function SetupPage() {
     setError("");
     setMsg("");
 
-    if (!proxyUrl.trim()) return setError(t("setup_err_proxy_required"));
-    if (!itemsSpreadsheetId) return setError(t("setup_err_items_link_invalid"));
-    if (!itemsSheetName.trim()) return setError(t("setup_err_items_tab_required"));
+    if (!proxyUrl.trim()) return setError("Proxy URL is required (Cloudflare Worker URL).");
+    if (!itemsSpreadsheetId) return setError("Items Sheet link invalid (cannot find spreadsheet ID).");
+    if (!itemsSheetName.trim()) return setError("Items tab name is required.");
 
     // Save proxy so API calls work
     saveSettings({ proxyUrl: proxyUrl.trim() });
@@ -64,9 +42,9 @@ export default function SetupPage() {
       const h = await getHeaders(itemsSpreadsheetId, itemsSheetName.trim());
       setHeaders(h);
       if (!keyColumn && h.length) setKeyColumn(h[0]);
-      setMsg(t("columns_loaded_choose_key"));
+      setMsg("Columns loaded. Please choose Key Column.");
     } catch (e) {
-      setError(e.message || t("failed_load_columns"));
+      setError(e.message || "Failed to load columns.");
     } finally {
       setLoading(false);
     }
@@ -76,14 +54,12 @@ export default function SetupPage() {
     setError("");
     setMsg("");
 
-    if (!proxyUrl.trim()) return setError(t("setup_err_proxy_required_short"));
-    if (!itemsSpreadsheetId) return setError(t("setup_err_items_invalid_short"));
-    if (!itemsSheetName.trim()) return setError(t("setup_err_items_tab_required"));
-    if (!keyColumn.trim()) return setError(t("setup_err_key_required"));
+    if (!proxyUrl.trim()) return setError("Proxy URL is required.");
+    if (!itemsSpreadsheetId) return setError("Items Sheet link invalid.");
+    if (!itemsSheetName.trim()) return setError("Items tab name is required.");
+    if (!keyColumn.trim()) return setError("Key Column is required. Click Load Columns first.");
 
     saveSettings({
-      language,
-
       proxyUrl: proxyUrl.trim(),
 
       itemsUrl,
@@ -92,6 +68,7 @@ export default function SetupPage() {
       keyColumn: keyColumn.trim(),
     });
 
+    // Move user into the app immediately
     nav("/items", { replace: true });
   };
 
@@ -102,50 +79,33 @@ export default function SetupPage() {
     setItemsSheetName("MASTER LIST");
     setHeaders([]);
     setKeyColumn("");
-    setMsg(t("cleared_saved_settings"));
+    setMsg("Cleared saved settings.");
     setError("");
-
-    // keep language consistent
-    setLanguage("en");
-    saveSettings({ language: "en" });
   };
 
   return (
     <div className="page" style={{ maxWidth: 780 }}>
-      <h2>{t("setup_title")}</h2>
+      <h2>Setup</h2>
 
       {error && <div className="alert alert-error">{error}</div>}
       {msg && <div className="alert alert-ok">{msg}</div>}
 
       <div className="card">
-        <h3>{t("language")}</h3>
+        <h3>1) Proxy URL</h3>
         <label className="field">
-          {t("language")}
-          <select value={language} onChange={(e) => applyLanguage(e.target.value)}>
-            <option value="en">{t("english")}</option>
-            <option value="es">{t("spanish")}</option>
-            <option value="vi">{t("vietnamese")}</option>
-          </select>
-        </label>
-        <div style={{ fontSize: 12, opacity: 0.8 }}>{t("language_applies_immediately")}</div>
-      </div>
-
-      <div className="card">
-        <h3>{t("proxy_url_title")}</h3>
-        <label className="field">
-          {t("proxy_url_label")}
+          Cloudflare Worker URL
           <input
             value={proxyUrl}
             onChange={(e) => setProxyUrl(e.target.value)}
-            placeholder={t("proxy_url_placeholder")}
+            placeholder="https://xxxx.workers.dev"
           />
         </label>
       </div>
 
       <div className="card">
-        <h3>{t("items_sheet_title")}</h3>
+        <h3>2) Items Sheet (942 - Vine Master Inventory)</h3>
         <label className="field">
-          {t("google_sheet_link")}
+          Google Sheet link
           <input
             value={itemsUrl}
             onChange={(e) => setItemsUrl(e.target.value)}
@@ -153,17 +113,17 @@ export default function SetupPage() {
           />
         </label>
         <label className="field">
-          {t("tab_name")}
+          Tab name
           <input value={itemsSheetName} onChange={(e) => setItemsSheetName(e.target.value)} />
         </label>
 
         <button onClick={loadColumns} disabled={loading}>
-          {loading ? t("loading") : t("load_columns")}
+          {loading ? "Loading..." : "Load Columns"}
         </button>
 
         {headers.length > 0 && (
           <label className="field" style={{ marginTop: 10 }}>
-            {t("key_column_label")}
+            Key Column (QR contains this value)
             <select value={keyColumn} onChange={(e) => setKeyColumn(e.target.value)}>
               {headers.map((h) => (
                 <option key={h} value={h}>
@@ -176,14 +136,16 @@ export default function SetupPage() {
       </div>
 
       <div className="card">
-        <div style={{ fontSize: 13, opacity: 0.8 }}>{t("harvest_setup_note")}</div>
+        <div style={{ fontSize: 13, opacity: 0.8 }}>
+          Harvest Log setup is now inside the <strong>Harvest</strong> tab (only required if you use Harvest).
+        </div>
       </div>
 
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
         <button onClick={saveAll} className="primary">
-          {t("save_setup")}
+          Save Setup
         </button>
-        <button onClick={doClear}>{t("clear_saved_setup")}</button>
+        <button onClick={doClear}>Clear Saved Setup</button>
       </div>
     </div>
   );
