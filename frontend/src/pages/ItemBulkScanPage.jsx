@@ -3,11 +3,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Html5QrcodeScanner } from "html5-qrcode";
 import { loadSettings } from "../store/settingsStore";
 import { getHeaders, bulkUpdate } from "../api/sheetsApi";
-import { useT } from "../i18n";
 
 export default function ItemBulkScanPage() {
-  const { t } = useT();
-
   const settings = useMemo(() => loadSettings(), []);
   const keyColumn = settings?.keyColumn || "";
 
@@ -21,7 +18,7 @@ export default function ItemBulkScanPage() {
   const [form, setForm] = useState({});
   const [isSaving, setIsSaving] = useState(false);
 
-  const [scanning, setScanning] = useState(false);
+  const [isScanning, setIsScanning] = useState(false);
 
   const scannerRef = useRef(null);
 
@@ -32,9 +29,7 @@ export default function ItemBulkScanPage() {
       } catch {}
       scannerRef.current = null;
     }
-    const el = document.getElementById("bulk-scan-reader");
-    if (el) el.innerHTML = "";
-    setScanning(false);
+    setIsScanning(false);
   };
 
   const startScanner = () => {
@@ -43,45 +38,55 @@ export default function ItemBulkScanPage() {
     setError("");
     setStatus("");
 
-    const el = document.getElementById("bulk-scan-reader");
-    if (el) el.innerHTML = "";
+    setIsScanning(true);
 
-    const qrbox = Math.min(340, Math.floor(window.innerWidth * 0.8));
-    const scanner = new Html5QrcodeScanner(
-      "bulk-scan-reader",
-      { fps: 15, qrbox, experimentalFeatures: { useBarCodeDetectorIfSupported: true } },
-      false
-    );
+    setTimeout(() => {
+      const el = document.getElementById("bulk-scan-reader");
+      if (!el) {
+        setError("Scanner container not ready.");
+        setIsScanning(false);
+        return;
+      }
+      el.innerHTML = "";
 
-    scanner.render(
-      async (decodedText) => {
-        const key = String(decodedText || "").trim();
-        if (!key) return;
-        setKeys((prev) => Array.from(new Set([...prev.map(String), String(key)])));
-      },
-      () => {}
-    );
+      const qrbox = Math.min(340, Math.floor(window.innerWidth * 0.8));
+      const scanner = new Html5QrcodeScanner(
+        "bulk-scan-reader",
+        { fps: 15, qrbox, experimentalFeatures: { useBarCodeDetectorIfSupported: true } },
+        false
+      );
 
-    scannerRef.current = scanner;
-    setScanning(true);
+      scanner.render(
+        async (decodedText) => {
+          const key = String(decodedText || "").trim();
+          if (!key) return;
+
+          // Deduplicate
+          setKeys((prev) => Array.from(new Set([...prev.map(String), String(key)])));
+        },
+        () => {}
+      );
+
+      scannerRef.current = scanner;
+    }, 0);
   };
 
   const loadCols = async () => {
     setError("");
-    setStatus(t("loading_columns"));
+    setStatus("Loading columns...");
     try {
       const h = await getHeaders(settings.itemsSpreadsheetId, settings.itemsSheetName);
       setHeaders(h);
-      setStatus(t("columns_loaded_choose_key"));
+      setStatus("Columns loaded.");
     } catch (e) {
       setStatus("");
-      setError(e.message || t("failed_load_columns"));
+      setError(e.message || "Failed to load columns.");
     }
   };
 
   const doBulkUpdate = async () => {
     setError("");
-    if (keys.length === 0) return setError(t("no_scanned_keys_yet"));
+    if (keys.length === 0) return setError("No scanned keys yet.");
 
     const patch = {};
     Object.keys(form).forEach((k) => {
@@ -91,12 +96,12 @@ export default function ItemBulkScanPage() {
       patch[k] = v;
     });
 
-    if (Object.keys(patch).length === 0) return setError(t("no_fields_entered"));
+    if (Object.keys(patch).length === 0) return setError("No fields entered. Fill at least 1 field to update.");
 
     setIsSaving(true);
     try {
       const r = await bulkUpdate(keys, patch);
-      setStatus(`${t("bulk_updated")} ${r.updated || 0}. ${t("not_found")} ${(r.notFound || []).length}`);
+      setStatus(`Bulk updated: ${r.updated || 0}. Not found: ${(r.notFound || []).length}`);
       setEditing(false);
     } catch (e) {
       setStatus("");
@@ -114,39 +119,49 @@ export default function ItemBulkScanPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  if (!settings?.proxyUrl) return <div>{t("please_go_setup_first")}</div>;
+  if (!settings?.proxyUrl) return <div>Please go to Setup first.</div>;
 
   return (
     <div className="card">
-      <h3>{t("bulk_scan_title")}</h3>
+      <h3>Bulk Scan</h3>
 
       {status && <div className="alert">{status}</div>}
       {error && <div className="alert alert-error">{error}</div>}
 
       <p>
-        {t("scan_many_qr")} <strong>{keys.length}</strong>
+        Scan many QR codes. Keys scanned: <strong>{keys.length}</strong>
       </p>
 
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
-        {!scanning ? (
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+        {!isScanning ? (
           <button className="primary" onClick={startScanner} disabled={isSaving}>
-            {t("start")}
+            Start Scanning
           </button>
         ) : (
-          <button onClick={stopScanner} disabled={isSaving}>
-            {t("stop")}
+          <button style={{ marginTop: 10 }} onClick={stopScanner} disabled={isSaving}>
+            Stop
           </button>
         )}
+      </div>
 
+      {/* IMPORTANT: always mounted so Html5QrcodeScanner can render reliably */}
+      <div style={{ marginTop: 10, display: isScanning ? "block" : "none" }}>
+        <div id="bulk-scan-reader" />
+      </div>
+
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
+        <button className="primary" onClick={() => setEditing((v) => !v)} disabled={isSaving}>
+          {editing ? "Cancel Edit" : "Edit"}
+        </button>
         <button
           onClick={() => {
             setKeys([]);
             setForm({});
-            setStatus(t("cleared_scanned_keys"));
+            setStatus("Cleared scanned keys.");
           }}
           disabled={isSaving}
         >
-          {t("clear_scans")}
+          Clear Scans
         </button>
 
         {keys.length > 0 && (
@@ -154,27 +169,21 @@ export default function ItemBulkScanPage() {
             onClick={async () => {
               try {
                 await navigator.clipboard.writeText(keys.join("\n"));
-                setStatus(t("copied_to_clipboard"));
+                setStatus("Copied scanned keys to clipboard.");
               } catch {
-                setError(t("copy_failed"));
+                setError("Copy failed (clipboard not available).");
               }
             }}
             disabled={isSaving}
           >
-            {t("copy_all")}
+            Copy All
           </button>
         )}
-
-        <button className={editing ? "" : "primary"} onClick={() => setEditing((v) => !v)} disabled={isSaving}>
-          {editing ? t("cancel_edit") : t("edit")}
-        </button>
       </div>
-
-      <div id="bulk-scan-reader" />
 
       {keys.length > 0 && (
         <div style={{ marginTop: 12 }}>
-          <div style={{ fontWeight: 800, marginBottom: 8 }}>{t("scanned_items")}</div>
+          <div style={{ fontWeight: 800, marginBottom: 8 }}>Scanned Items</div>
           <div
             style={{
               maxHeight: 220,
@@ -203,7 +212,7 @@ export default function ItemBulkScanPage() {
               >
                 <span style={{ fontWeight: 700 }}>{k}</span>
                 <button onClick={() => removeKey(k)} style={{ padding: "2px 8px" }} disabled={isSaving}>
-                  {t("remove")}
+                  Remove
                 </button>
               </div>
             ))}
@@ -213,7 +222,7 @@ export default function ItemBulkScanPage() {
 
       {editing && (
         <>
-          <p style={{ marginTop: 12 }}>{t("fill_only_fields_update")}</p>
+          <p style={{ marginTop: 12 }}>Fill only fields you want to update. Blank fields keep existing values.</p>
 
           <div className="grid">
             {headers
@@ -224,7 +233,7 @@ export default function ItemBulkScanPage() {
                   <input
                     value={form[h] ?? ""}
                     onChange={(e) => setForm((prev) => ({ ...prev, [h]: e.target.value }))}
-                    placeholder={t("leave_blank_keep_existing")}
+                    placeholder="leave blank to keep existing"
                     disabled={isSaving}
                   />
                 </label>
@@ -232,7 +241,7 @@ export default function ItemBulkScanPage() {
           </div>
 
           <button className="primary" onClick={doBulkUpdate} disabled={isSaving}>
-            {isSaving ? t("saving") : t("save_bulk_update")}
+            {isSaving ? "Saving..." : "Save Bulk Update"}
           </button>
         </>
       )}
