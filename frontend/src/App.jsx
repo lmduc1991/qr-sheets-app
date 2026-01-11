@@ -6,6 +6,7 @@ import SetupPage from "./pages/SetupPage";
 import ItemsManagementPage from "./pages/ItemsManagementPage";
 import HarvestManagementPage from "./pages/HarvestManagementPage";
 import BinStoragePage from "./pages/BinStoragePage";
+import PackingUnpackingManagementPage from "./pages/PackingUnpackingManagementPage";
 import { loadSettings, onSettingsChange } from "./store/settingsStore";
 
 export default function App() {
@@ -36,6 +37,10 @@ export default function App() {
             Bin Storage
           </NavLink>
 
+          <NavLink className={({ isActive }) => "tab" + (isActive ? " tab-active" : "")} to="/packing">
+            Packing / Unpacking
+          </NavLink>
+
           <NavLink className={({ isActive }) => "tab" + (isActive ? " tab-active" : "")} to="/setup">
             Setup
           </NavLink>
@@ -60,6 +65,11 @@ export default function App() {
           <Route
             path="/storage"
             element={hasSetup ? <BinStoragePage /> : <Navigate to="/setup" replace />}
+          />
+
+          <Route
+            path="/packing"
+            element={hasSetup ? <PackingUnpackingManagementPage /> : <Navigate to="/setup" replace />}
           />
 
           <Route path="*" element={<Navigate to="/" replace />} />
