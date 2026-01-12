@@ -42,7 +42,6 @@ function PrettyDetails({ item, preferredOrder = [] }) {
 }
 
 export default function ItemScanPage() {
-  // Reactive settings
   const [settings, setSettings] = useState(() => loadSettings());
   useEffect(() => onSettingsChange(setSettings), []);
 
@@ -53,6 +52,7 @@ export default function ItemScanPage() {
   const [error, setError] = useState("");
 
   const [scannedKey, setScannedKey] = useState("");
+  const [keyUsed, setKeyUsed] = useState(""); // <--- NEW (actual key used to match Sheets)
   const [headers, setHeaders] = useState([]);
   const [item, setItem] = useState(null);
 
@@ -60,7 +60,6 @@ export default function ItemScanPage() {
   const [form, setForm] = useState({});
 
   const [isSaving, setIsSaving] = useState(false);
-
   const [isScanning, setIsScanning] = useState(false);
 
   const scannerRef = useRef(null);
@@ -82,7 +81,7 @@ export default function ItemScanPage() {
     setStatus("");
 
     const el = document.getElementById("item-scan-reader");
-    if (el) el.innerHTML = ""; // reset scanner DOM
+    if (el) el.innerHTML = "";
 
     const qrbox = Math.min(340, Math.floor(window.innerWidth * 0.8));
     const scanner = new Html5QrcodeScanner(
@@ -112,18 +111,30 @@ export default function ItemScanPage() {
     setItem(null);
     setForm({});
     setScannedKey(key);
+    setKeyUsed("");
 
     try {
       const r = await getItemByKey(key);
       setHeaders(r.headers || []);
+
       if (!r.found) {
         setStatus("");
         setError(`Item not found in ${itemsSheetName || "Items sheet"}.`);
         return;
       }
+
+      // If Sheets matched the stripped version, preserve it for update/write
+      setKeyUsed(r._keyUsed || key);
+
+      // UI note (optional but helpful)
+      if ((r._keyUsed || key) !== key) {
+        setStatus(`Item loaded. Note: Sheet key is "${r._keyUsed}" (scanned "${key}").`);
+      } else {
+        setStatus("Item loaded.");
+      }
+
       setItem(r.item);
       setForm(r.item);
-      setStatus("Item loaded.");
     } catch (e) {
       setStatus("");
       setError(e.message || "Failed to load item.");
@@ -137,7 +148,6 @@ export default function ItemScanPage() {
     setIsSaving(true);
 
     try {
-      // patch excludes Key column
       const patch = {};
       (headers || []).forEach((h) => {
         if (!h) return;
@@ -145,7 +155,10 @@ export default function ItemScanPage() {
         patch[h] = form[h] ?? "";
       });
 
-      const r = await updateItemByKey(scannedKey, patch);
+      // Use keyUsed so updates hit the correct row even if Sheets dropped leading zeros.
+      const targetKey = String(keyUsed || scannedKey || "").trim();
+      const r = await updateItemByKey(targetKey, patch);
+
       setStatus(`Saved. Updated fields: ${r.updated ?? 0}`);
       setEditing(false);
       setItem((prev) => ({ ...(prev || {}), ...patch }));
@@ -160,17 +173,15 @@ export default function ItemScanPage() {
   const scanAnother = async () => {
     setItem(null);
     setScannedKey("");
+    setKeyUsed("");
     setHeaders([]);
     setForm({});
     setEditing(false);
     setStatus("");
     setError("");
-
-    // Return to WAIT state (do not auto-start)
     await stopScanner();
   };
 
-  // Cleanup on unmount
   useEffect(() => {
     return () => {
       stopScanner();
@@ -221,6 +232,11 @@ export default function ItemScanPage() {
           <div style={{ marginBottom: 10 }}>
             <div>
               <strong>Key:</strong> {scannedKey}
+              {keyUsed && keyUsed !== scannedKey ? (
+                <span style={{ marginLeft: 10, fontSize: 13, opacity: 0.85 }}>
+                  (Sheet key: <strong>{keyUsed}</strong>)
+                </span>
+              ) : null}
             </div>
 
             <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
