@@ -29,6 +29,36 @@ function invalidateKey(key) {
   mem.combo.delete(key);
 }
 
+// -------- Leading-zero helpers --------
+function stripLeadingZeros(s) {
+  const x = String(s ?? "");
+  if (!/^\d+$/.test(x)) return x;          // only normalize purely numeric strings
+  const y = x.replace(/^0+/, "");
+  return y === "" ? "0" : y;
+}
+
+function keyVariants(keyValue) {
+  const k = String(keyValue || "").trim();
+  if (!k) return [];
+
+  const stripped = stripLeadingZeros(k);
+
+  // If no change, return just one key
+  if (stripped === k) return [k];
+
+  // Return both: try exact first, then fallback
+  return [k, stripped];
+}
+
+function expandKeysWithVariants(keys) {
+  const out = [];
+  for (const k of keys || []) {
+    out.push(...keyVariants(k));
+  }
+  // dedupe
+  return Array.from(new Set(out.map((x) => String(x).trim()).filter(Boolean)));
+}
+
 async function callApi(action, payload, { timeoutMs = 12000 } = {}) {
   const s = loadSettings();
   if (!s?.proxyUrl) throw new Error("Missing Proxy URL. Go to Setup and save settings first.");
@@ -39,9 +69,7 @@ async function callApi(action, payload, { timeoutMs = 12000 } = {}) {
   try {
     const resp = await fetch(s.proxyUrl, {
       method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
+      headers: { "content-type": "application/json" },
       body: JSON.stringify({ action, payload }),
       signal: controller.signal,
     });
@@ -77,6 +105,7 @@ export async function getItemByKey(keyValue) {
   const key = String(keyValue || "").trim();
   if (!key) throw new Error("Missing key value.");
 
+  // Cache per *exact* scanned key; fallback result is still valid for this scan.
   const cached = getCached(mem.item, key);
   if (cached) return cached;
 
@@ -85,19 +114,34 @@ export async function getItemByKey(keyValue) {
     throw new Error("Items settings missing. Check Setup (Items sheet, tab, key column).");
   }
 
-  const data = await callApi(
-    "getItemByKey",
-    {
-      spreadsheetId: s.itemsSpreadsheetId,
-      sheetName: s.itemsSheetName,
-      keyColumn: s.keyColumn,
-      keyValue: key,
-    },
-    { timeoutMs: 12000 }
-  );
+  const variants = keyVariants(key);
+  let last = null;
 
-  setCached(mem.item, key, data, 60_000);
-  return data;
+  for (const v of variants) {
+    const data = await callApi(
+      "getItemByKey",
+      {
+        spreadsheetId: s.itemsSpreadsheetId,
+        sheetName: s.itemsSheetName,
+        keyColumn: s.keyColumn,
+        keyValue: v,
+      },
+      { timeoutMs: 12000 }
+    );
+
+    // Attach which key actually matched in Sheets
+    const enriched = { ...data, _keyUsed: v, _keyScanned: key };
+
+    last = enriched;
+    if (enriched?.found) {
+      setCached(mem.item, key, enriched, 60_000);
+      return enriched;
+    }
+  }
+
+  // Not found for any variant
+  setCached(mem.item, key, last, 30_000);
+  return last;
 }
 
 export async function updateItemByKey(keyValue, patch) {
@@ -125,7 +169,8 @@ export async function bulkUpdate(keys, patch) {
     throw new Error("Items settings missing. Check Setup (Items sheet, tab, key column).");
   }
 
-  const cleanKeys = (keys || []).map((k) => String(k || "").trim()).filter(Boolean);
+  // Expand keys with variants so leading-zero scans still match numeric-stored sheet values.
+  const cleanKeys = expandKeysWithVariants(keys);
 
   const r = await callApi("bulkUpdate", {
     spreadsheetId: s.itemsSpreadsheetId,
@@ -195,25 +240,38 @@ export async function getItemAndHarvestByKey(keyValue) {
     throw new Error("Harvest settings missing. Open Harvest tab and set Harvest sheet + tab first.");
   }
 
-  const data = await callApi(
-    "getItemAndHarvestByKey",
-    {
-      keyValue: key,
-      items: {
-        spreadsheetId: s.itemsSpreadsheetId,
-        sheetName: s.itemsSheetName,
-        keyColumn: s.keyColumn,
-      },
-      harvest: {
-        spreadsheetId: s.harvestSpreadsheetId,
-        sheetName: s.harvestSheetName,
-      },
-    },
-    { timeoutMs: 12000 }
-  );
+  const variants = keyVariants(key);
+  let last = null;
 
-  setCached(mem.combo, key, data, 60_000);
-  return data;
+  for (const v of variants) {
+    const data = await callApi(
+      "getItemAndHarvestByKey",
+      {
+        keyValue: v,
+        items: {
+          spreadsheetId: s.itemsSpreadsheetId,
+          sheetName: s.itemsSheetName,
+          keyColumn: s.keyColumn,
+        },
+        harvest: {
+          spreadsheetId: s.harvestSpreadsheetId,
+          sheetName: s.harvestSheetName,
+        },
+      },
+      { timeoutMs: 12000 }
+    );
+
+    const enriched = { ...data, _keyUsed: v, _keyScanned: key };
+
+    last = enriched;
+    if (enriched?.itemFound) {
+      setCached(mem.combo, key, enriched,․․ 60_000);
+      return enriched;
+    }
+  }
+
+  setCached(mem.combo, key, last, 30_000);
+  return last;
 }
 
 // ---------- Storage ----------
@@ -245,11 +303,6 @@ export async function appendBinStorage({ binLabel, bagLabels }) {
   });
 }
 
-/**
- * Load existing children for a parent label so frontend can block duplicates during scanning.
- * mode="bag": parentLabel = bagLabel, returns vine IDs already in that bag (from Bag tab)
- * mode="bin": parentLabel = binLabel, returns bag labels already in that bin (from Bin tab)
- */
 export async function getExistingChildrenForParent({ mode, parentLabel }) {
   const s = requireStorageSettings();
 
