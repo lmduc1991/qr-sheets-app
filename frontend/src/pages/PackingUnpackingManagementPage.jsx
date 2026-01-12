@@ -21,6 +21,22 @@ function hasValue(v) {
   return v !== null && v !== undefined && String(v).trim() !== "";
 }
 
+/** Case-insensitive field lookup from a record object */
+function normKey(s) {
+  return String(s ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " "); // collapse whitespace
+}
+function getFieldCI(record, fieldName) {
+  if (!record || typeof record !== "object") return "";
+  const target = normKey(fieldName);
+  for (const k of Object.keys(record)) {
+    if (normKey(k) === target) return record[k];
+  }
+  return "";
+}
+
 function PrettyRecord({ record }) {
   if (!record) return null;
   const entries = Object.entries(record || {}).filter(([k, v]) => k && hasValue(v));
@@ -304,14 +320,20 @@ export default function PackingUnpackingManagementPage() {
           setRowIndex(ri);
           setRecord(rec);
 
-          const pd = rec ? rec["Packing Date"] : undefined;
-          const pq = rec ? rec["Packing Quantity"] : undefined;
+          // Case-insensitive reads for template headers (e.g., PACKING DATE)
+          const pd = getFieldCI(rec, "Packing Date"); // works for PACKING DATE too
+          const pq = getFieldCI(rec, "Packing Quantity");
+
           const alreadyPacked = hasValue(pd) || hasValue(pq);
 
           setMsg(
             alreadyPacked
               ? tt("Record found (already packed).", "Registro encontrado (ya empacado).", "Tìm thấy (đã đóng gói).")
-              : tt("Record found (ready to pack).", "Registro encontrado (listo para empacar).", "Tìm thấy (sẵn sàng đóng gói).")
+              : tt(
+                  "Record found (ready to pack).",
+                  "Registro encontrado (listo para empacar).",
+                  "Tìm thấy (sẵn sàng đóng gói)."
+                )
           );
 
           setStep("or_record");
@@ -349,7 +371,6 @@ export default function PackingUnpackingManagementPage() {
               )
             );
 
-            // Restart scan-2 cleanly
             setLabel2("");
             setMsg("");
             setError("");
@@ -367,7 +388,6 @@ export default function PackingUnpackingManagementPage() {
               )
             );
 
-            // Restart scan-2 cleanly
             setLabel2("");
             setMsg("");
             setError("");
@@ -380,9 +400,10 @@ export default function PackingUnpackingManagementPage() {
           setMsg(tt("Matched. Fill Packing Form.", "Coincide. Completa el formulario.", "Khớp. Điền form."));
           setFormMode("create");
 
+          // Prefill (case-insensitive)
           const rec = record || {};
-          const pd = rec["Packing Date"];
-          const pq = rec["Packing Quantity"];
+          const pd = getFieldCI(rec, "Packing Date");
+          const pq = getFieldCI(rec, "Packing Quantity");
           if (hasValue(pd)) setPackingDate(String(pd));
           if (hasValue(pq)) setPackingQty(String(pq));
 
@@ -402,8 +423,8 @@ export default function PackingUnpackingManagementPage() {
     setFormMode("edit");
 
     const rec = record || {};
-    const pd = rec["Packing Date"];
-    const pq = rec["Packing Quantity"];
+    const pd = getFieldCI(rec, "Packing Date");
+    const pq = getFieldCI(rec, "Packing Quantity");
     if (hasValue(pd)) setPackingDate(String(pd));
     if (hasValue(pq)) setPackingQty(String(pq));
 
@@ -448,7 +469,7 @@ export default function PackingUnpackingManagementPage() {
   const startMode = async (m) => {
     if (!ensureTabForMode(m.needs)) return;
 
-    // Only implement OR-Packing now (frontend first). Others remain placeholder.
+    // Only OR-Packing is implemented now (frontend first).
     if (m.id === "or-pack") {
       await beginOrPacking();
       return;
@@ -594,7 +615,7 @@ export default function PackingUnpackingManagementPage() {
               <PrettyRecord record={record} />
 
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
-                {hasValue(record?.["Packing Date"]) || hasValue(record?.["Packing Quantity"]) ? (
+                {hasValue(getFieldCI(record, "Packing Date")) || hasValue(getFieldCI(record, "Packing Quantity")) ? (
                   <button className="primary" onClick={openEditPackingForm} disabled={isSaving}>
                     {tt("Edit Packing Form", "Editar formulario", "Sửa form")}
                   </button>
