@@ -4,6 +4,7 @@ import { loadSettings } from "../store/settingsStore";
 const mem = {
   item: new Map(), // key -> { data, exp }
   combo: new Map(), // key -> { data, exp }
+  packing: new Map(), // key -> { data, exp } (packing label lookups)
 };
 
 function nowMs() {
@@ -29,10 +30,14 @@ function invalidateKey(key) {
   mem.combo.delete(key);
 }
 
+function invalidatePackingKey(key) {
+  mem.packing.delete(key);
+}
+
 // -------- Leading-zero helpers --------
 function stripLeadingZeros(s) {
   const x = String(s ?? "");
-  if (!/^\d+$/.test(x)) return x;          // only normalize purely numeric strings
+  if (!/^\d+$/.test(x)) return x; // only normalize purely numeric strings
   const y = x.replace(/^0+/, "");
   return y === "" ? "0" : y;
 }
@@ -59,61 +64,59 @@ function expandKeysWithVariants(keys) {
   return Array.from(new Set(out.map((x) => String(x).trim()).filter(Boolean)));
 }
 
+// ---------- Network core ----------
 async function callApi(action, payload, { timeoutMs = 12000 } = {}) {
   const s = loadSettings();
-  if (!s?.proxyUrl) throw new Error("Missing Proxy URL. Go to Setup and save settings first.");
+  if (!s?.proxyUrl) throw new Error("Missing Proxy URL. Go to Setup and set Cloudflare Worker URL first.");
 
-  const controller = new AbortController();
-  const t = setTimeout(() => controller.abort(), timeoutMs);
+  const ctrl = new AbortController();
+  const to = setTimeout(() => ctrl.abort(), timeoutMs);
 
   try {
-    const resp = await fetch(s.proxyUrl, {
+    const res = await fetch(s.proxyUrl, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action, payload }),
-      signal: controller.signal,
+      signal: ctrl.signal,
     });
 
-    const data = await resp.json().catch(() => ({}));
-
-    if (!resp.ok || data?.ok === false) {
-      throw new Error(data?.error || `Request failed (${resp.status})`);
+    const text = await res.text();
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      throw new Error(text || "Invalid JSON from server");
     }
 
+    if (!res.ok) throw new Error(data?.error || `Request failed (${res.status})`);
+    if (data?.ok === false) throw new Error(data?.error || "Request failed");
     return data;
   } catch (e) {
-    if (e?.name === "AbortError") throw new Error("Request timed out. Check internet or Apps Script.");
+    if (e?.name === "AbortError") throw new Error("Request timeout. Please retry.");
     throw e;
   } finally {
-    clearTimeout(t);
+    clearTimeout(to);
   }
 }
 
-// ---------- Generic ----------
-export async function getHeaders(spreadsheetId, sheetName) {
-  const r = await callApi("getHeaders", { spreadsheetId, sheetName });
-  return r.headers || [];
-}
-
-export async function getSheetTabs(spreadsheetId) {
-  const r = await callApi("getSheetTabs", { spreadsheetId });
-  return r.tabs || [];
-}
-
 // ---------- Items ----------
-export async function getItemByKey(keyValue) {
-  const key = String(keyValue || "").trim();
-  if (!key) throw new Error("Missing key value.");
+export async function getHeaders(spreadsheetId, sheetName) {
+  return await callApi("getHeaders", { spreadsheetId, sheetName });
+}
 
-  // Cache per *exact* scanned key; fallback result is still valid for this scan.
+export async function getItemByKey(keyValue, { timeoutMs = 12000 } = {}) {
+  const key = String(keyValue || "").trim();
+  if (!key) throw new Error("Missing key.");
+
   const cached = getCached(mem.item, key);
   if (cached) return cached;
 
   const s = loadSettings();
   if (!s?.itemsSpreadsheetId || !s?.itemsSheetName || !s?.keyColumn) {
-    throw new Error("Items settings missing. Check Setup (Items sheet, tab, key column).");
+    throw new Error("Items settings missing. Go to Setup and set Items sheet + Key Column first.");
   }
 
+  // Try variants to preserve leading zeros behavior
   const variants = keyVariants(key);
   let last = null;
 
@@ -126,29 +129,27 @@ export async function getItemByKey(keyValue) {
         keyColumn: s.keyColumn,
         keyValue: v,
       },
-      { timeoutMs: 12000 }
+      { timeoutMs }
     );
 
-    // Attach which key actually matched in Sheets
-    const enriched = { ...data, _keyUsed: v, _keyScanned: key };
-
-    last = enriched;
-    if (enriched?.found) {
-      setCached(mem.item, key, enriched, 60_000);
-      return enriched;
+    last = { ...data, _keyUsed: v, _keyScanned: key };
+    if (last?.found) {
+      setCached(mem.item, key, last, 60_000);
+      return last;
     }
   }
 
-  // Not found for any variant
   setCached(mem.item, key, last, 30_000);
   return last;
 }
 
 export async function updateItemByKey(keyValue, patch) {
   const key = String(keyValue || "").trim();
+  if (!key) throw new Error("Missing key.");
+
   const s = loadSettings();
   if (!s?.itemsSpreadsheetId || !s?.itemsSheetName || !s?.keyColumn) {
-    throw new Error("Items settings missing. Check Setup (Items sheet, tab, key column).");
+    throw new Error("Items settings missing. Go to Setup and set Items sheet + Key Column first.");
   }
 
   const r = await callApi("updateItemByKey", {
@@ -156,7 +157,7 @@ export async function updateItemByKey(keyValue, patch) {
     sheetName: s.itemsSheetName,
     keyColumn: s.keyColumn,
     keyValue: key,
-    patch,
+    patch: patch || {},
   });
 
   invalidateKey(key);
@@ -166,75 +167,79 @@ export async function updateItemByKey(keyValue, patch) {
 export async function bulkUpdate(keys, patch) {
   const s = loadSettings();
   if (!s?.itemsSpreadsheetId || !s?.itemsSheetName || !s?.keyColumn) {
-    throw new Error("Items settings missing. Check Setup (Items sheet, tab, key column).");
+    throw new Error("Items settings missing. Go to Setup and set Items sheet + Key Column first.");
   }
 
-  // Expand keys with variants so leading-zero scans still match numeric-stored sheet values.
-  const cleanKeys = expandKeysWithVariants(keys);
+  const expandedKeys = expandKeysWithVariants(keys);
 
   const r = await callApi("bulkUpdate", {
     spreadsheetId: s.itemsSpreadsheetId,
     sheetName: s.itemsSheetName,
     keyColumn: s.keyColumn,
-    keys: cleanKeys,
-    patch,
+    keys: expandedKeys,
+    patch: patch || {},
   });
 
-  cleanKeys.forEach(invalidateKey);
+  // invalidate scanned keys cache
+  for (const k of expandedKeys) invalidateKey(k);
+
   return r;
 }
 
-// ---------- Harvest ----------
-function requireHarvestSettings() {
+// ---------- Harvest (unchanged) ----------
+export async function appendHarvestLog(payload) {
   const s = loadSettings();
   if (!s?.harvestSpreadsheetId || !s?.harvestSheetName) {
     throw new Error("Harvest settings missing. Open Harvest tab and set Harvest sheet + tab first.");
   }
-  return s;
-}
-
-export async function appendHarvestLog(payload) {
-  const s = requireHarvestSettings();
-  if (payload?.itemKey) invalidateKey(String(payload.itemKey).trim());
 
   return await callApi("appendHarvestLog", {
     spreadsheetId: s.harvestSpreadsheetId,
     sheetName: s.harvestSheetName,
-    ...payload,
+    row: payload,
   });
 }
 
-export async function getHarvestLogByKey(itemKey) {
-  const s = requireHarvestSettings();
+export async function getHarvestLogByKey(keyValue) {
+  const s = loadSettings();
+  if (!s?.harvestSpreadsheetId || !s?.harvestSheetName) {
+    throw new Error("Harvest settings missing. Open Harvest tab and set Harvest sheet + tab first.");
+  }
+
+  const key = String(keyValue || "").trim();
+  if (!key) throw new Error("Missing key.");
 
   return await callApi("getHarvestLogByKey", {
     spreadsheetId: s.harvestSpreadsheetId,
     sheetName: s.harvestSheetName,
-    itemKey,
+    keyValue: key,
   });
 }
 
-export async function updateHarvestLogByRow(payload) {
-  const s = requireHarvestSettings();
-  if (payload?.itemKey) invalidateKey(String(payload.itemKey).trim());
+export async function updateHarvestLogByRow(rowIndex, patch) {
+  const s = loadSettings();
+  if (!s?.harvestSpreadsheetId || !s?.harvestSheetName) {
+    throw new Error("Harvest settings missing. Open Harvest tab and set Harvest sheet + tab first.");
+  }
 
   return await callApi("updateHarvestLogByRow", {
     spreadsheetId: s.harvestSpreadsheetId,
     sheetName: s.harvestSheetName,
-    ...payload,
+    rowIndex,
+    patch: patch || {},
   });
 }
 
 export async function getItemAndHarvestByKey(keyValue) {
   const key = String(keyValue || "").trim();
-  if (!key) throw new Error("Missing key value.");
+  if (!key) throw new Error("Missing key.");
 
   const cached = getCached(mem.combo, key);
   if (cached) return cached;
 
   const s = loadSettings();
   if (!s?.itemsSpreadsheetId || !s?.itemsSheetName || !s?.keyColumn) {
-    throw new Error("Items settings missing. Check Setup (Items sheet, tab, key column).");
+    throw new Error("Items settings missing. Go to Setup and set Items sheet + Key Column first.");
   }
   if (!s?.harvestSpreadsheetId || !s?.harvestSheetName) {
     throw new Error("Harvest settings missing. Open Harvest tab and set Harvest sheet + tab first.");
@@ -265,7 +270,8 @@ export async function getItemAndHarvestByKey(keyValue) {
 
     last = enriched;
     if (enriched?.itemFound) {
-      setCached(mem.combo, key, enriched,․․ 60_000);
+      // FIX: remove invalid characters that could break builds
+      setCached(mem.combo, key, enriched, 60_000);
       return enriched;
     }
   }
@@ -281,6 +287,10 @@ function requireStorageSettings() {
     throw new Error("Storage settings missing. Open Bin Storage tab and set Storage sheet + tabs first.");
   }
   return s;
+}
+
+export async function getSheetTabs(spreadsheetId) {
+  return await callApi("getSheetTabs", { spreadsheetId });
 }
 
 export async function appendBagStorage({ bagLabel, vineIds }) {
@@ -316,4 +326,95 @@ export async function getExistingChildrenForParent({ mode, parentLabel }) {
   });
 
   return r.children || [];
+}
+
+// ---------- Packing / Unpacking ----------
+function requirePackingSettings(needs) {
+  const s = loadSettings();
+  if (!s?.packingSpreadsheetId) {
+    throw new Error("Packing settings missing. Open Packing tab and save the Packing Sheet setup first.");
+  }
+  if (needs === "or" && !s?.packingOrSheetName) {
+    throw new Error("Packing OR tab is not set. Open Packing tab and choose OR tab, then Save Packing Setup.");
+  }
+  if (needs === "grafting" && !s?.packingGraftingSheetName) {
+    throw new Error("Packing GRAFTING tab is not set. Open Packing tab and choose GRAFTING tab, then Save Packing Setup.");
+  }
+  return s;
+}
+
+function getPackingSheetName(s, needs) {
+  return needs === "grafting" ? s.packingGraftingSheetName : s.packingOrSheetName;
+}
+
+/**
+ * Lookup a packing record by a scanned label QR.
+ * Expected backend response:
+ * { found: boolean, rowIndex?: number, record?: object, headers?: string[] }
+ */
+export async function getPackingRecordByLabel({ needs = "or", labelValue, timeoutMs = 12000 } = {}) {
+  const label = String(labelValue || "").trim();
+  if (!label) throw new Error("Missing label value.");
+
+  const cached = getCached(mem.packing, label);
+  if (cached) return cached;
+
+  const s = requirePackingSettings(needs);
+  const sheetName = getPackingSheetName(s, needs);
+
+  const r = await callApi(
+    "getPackingRecordByLabel",
+    {
+      spreadsheetId: s.packingSpreadsheetId,
+      sheetName,
+      needs,
+      labelValue: label,
+    },
+    { timeoutMs }
+  );
+
+  // Cache even negative lookups briefly (prevents hammering)
+  setCached(mem.packing, label, r, r?.found ? 60_000 : 20_000);
+  return r;
+}
+
+/**
+ * Update packing fields by row index (note is append-only on backend).
+ * Expected backend response:
+ * { updated: number }
+ */
+export async function updatePackingByRow({
+  needs = "or",
+  rowIndex,
+  label1,
+  label2,
+  packingDate,
+  packingQuantity,
+  noteAppend,
+  timeoutMs = 12000,
+} = {}) {
+  const s = requirePackingSettings(needs);
+  const sheetName = getPackingSheetName(s, needs);
+
+  const r = await callApi(
+    "updatePackingByRow",
+    {
+      spreadsheetId: s.packingSpreadsheetId,
+      sheetName,
+      needs,
+      rowIndex,
+      label1,
+      label2,
+      packingDate,
+      packingQuantity,
+      noteAppend,
+    },
+    { timeoutMs }
+  );
+
+  // Invalidate caches for scanned labels (so re-scan shows fresh values)
+  if (label1) invalidatePackingKey(String(label1).trim());
+  if (label2) invalidatePackingKey(String(label2).trim());
+
+  return r;
 }
