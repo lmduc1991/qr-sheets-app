@@ -1,3 +1,4 @@
+// src/pages/HarvestManagementPage.jsx
 import { useEffect, useRef, useState } from "react";
 import { Html5QrcodeScanner } from "html5-qrcode";
 import { loadSettings, saveSettings, onSettingsChange } from "../store/settingsStore";
@@ -17,6 +18,18 @@ function today() {
 function extractSpreadsheetId(url) {
   const m = String(url || "").match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
   return m ? m[1] : "";
+}
+
+// Normalize purely numeric strings to avoid leading-zero mismatch
+function stripLeadingZeros(s) {
+  const x = String(s ?? "");
+  if (!/^\d+$/.test(x)) return x;
+  const y = x.replace(/^0+/, "");
+  return y === "" ? "0" : y;
+}
+
+function keysMatch(a, b) {
+  return stripLeadingZeros(a) === stripLeadingZeros(b);
 }
 
 function PrettyDetails({ item, preferredOrder = [] }) {
@@ -57,13 +70,11 @@ function PrettyDetails({ item, preferredOrder = [] }) {
 }
 
 export default function HarvestManagementPage() {
-  // Reactive settings (no reload needed)
   const [settings, setSettings] = useState(() => loadSettings());
   useEffect(() => onSettingsChange(setSettings), []);
 
   const keyColumn = settings?.keyColumn || "";
 
-  // Harvest sheet setup inside Harvest tab
   const [harvestUrl, setHarvestUrl] = useState(settings?.harvestUrl || "");
   const [harvestSheetName, setHarvestSheetName] = useState(settings?.harvestSheetName || "Harvesting Log");
   const [setupOpen, setSetupOpen] = useState(false);
@@ -103,20 +114,19 @@ export default function HarvestManagementPage() {
     }
   };
 
-  // Workflow steps:
-  // idle | scanItem | viewItem | verifyHarvest | harvestForm | verifyProcessing | processingForm
   const [step, setStep] = useState("idle");
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
 
-  const [itemKey, setItemKey] = useState("");
+  const [itemKey, setItemKey] = useState("");       // scanned
+  const [itemKeyUsed, setItemKeyUsed] = useState(""); // actual key used to match Sheets (may be stripped)
   const [item, setItem] = useState(null);
   const [headers, setHeaders] = useState([]);
 
   const [harvestExists, setHarvestExists] = useState(false);
   const [harvestRow, setHarvestRow] = useState(null);
 
-  const [harvestFormMode, setHarvestFormMode] = useState("create"); // create | view | edit
+  const [harvestFormMode, setHarvestFormMode] = useState("create");
   const [harvestForm, setHarvestForm] = useState({
     harvestingDate: today(),
     numberOfShoot: "",
@@ -124,7 +134,7 @@ export default function HarvestManagementPage() {
     shoot2Length: "",
   });
 
-  const [processingFormMode, setProcessingFormMode] = useState("view"); // view | edit
+  const [processingFormMode, setProcessingFormMode] = useState("view");
   const [processingForm, setProcessingForm] = useState({
     processingDate: today(),
     xLarge: "",
@@ -165,8 +175,6 @@ export default function HarvestManagementPage() {
         const key = String(decodedText || "").trim();
         if (!key) return;
 
-        // CRITICAL FIX: await async handler + catch errors.
-        // Without this, a thrown error becomes an unhandled rejection and can blank the page.
         try {
           await stopScanner();
           await onScanOnce(key);
@@ -184,6 +192,7 @@ export default function HarvestManagementPage() {
 
   const resetStateForNewScan = () => {
     setItemKey("");
+    setItemKeyUsed("");
     setItem(null);
     setHeaders([]);
 
@@ -221,8 +230,6 @@ export default function HarvestManagementPage() {
         setError("");
         setStatus("Loading item + log row…");
 
-        // IMPORTANT: getItemAndHarvestByKey() returns FLAT shape from Apps Script:
-        // { itemFound, itemHeaders, itemRow, item, harvestFound, harvestRow, harvest }
         const r = await getItemAndHarvestByKey(key);
 
         setHeaders(r?.itemHeaders || []);
@@ -232,7 +239,13 @@ export default function HarvestManagementPage() {
         }
 
         setItemKey(key);
+        setItemKeyUsed(r?._keyUsed || key);
+
         setItem(r?.item || null);
+
+        if ((r?._keyUsed || key) !== key) {
+          setStatus(`Item loaded. Note: Sheet key is "${r._keyUsed}" (scanned "${key}").`);
+        }
 
         if (r?.harvestFound) {
           setHarvestExists(true);
@@ -246,7 +259,6 @@ export default function HarvestManagementPage() {
           });
           setHarvestFormMode("view");
 
-          // Apps Script uses: numberXL/numberL/numberM/numberS/numberOR
           setProcessingForm({
             processingDate: r.harvest?.processingDate || today(),
             xLarge: r.harvest?.numberXL ?? "",
@@ -257,12 +269,12 @@ export default function HarvestManagementPage() {
           });
           setProcessingFormMode("view");
 
-          setStatus("Item loaded (log record exists).");
+          if ((r?._keyUsed || key) === key) setStatus("Item loaded (log record exists).");
         } else {
           setHarvestExists(false);
           setHarvestRow(null);
           setHarvestFormMode("create");
-          setStatus("Item loaded (no log record yet).");
+          if ((r?._keyUsed || key) === key) setStatus("Item loaded (no log record yet).");
         }
 
         setStep("viewItem");
@@ -277,7 +289,8 @@ export default function HarvestManagementPage() {
 
     setTimeout(() => {
       startScanner(domId, async (scanned) => {
-        if (scanned === itemKey) {
+        // Compare normalized keys so 07617 matches 7617
+        if (keysMatch(scanned, itemKeyUsed || itemKey)) {
           setError("");
           setStatus("Matched.");
           setStep(nextStep);
@@ -315,12 +328,13 @@ export default function HarvestManagementPage() {
     setIsSaving(true);
 
     try {
-      const photoCount = getPhotoCount(itemKey);
+      const photoCount = getPhotoCount(itemKeyUsed || itemKey);
+      const targetKey = String(itemKeyUsed || itemKey || "").trim();
 
       if (harvestExists && harvestRow != null) {
         await updateHarvestLogByRow({
           rowIndex: harvestRow,
-          itemKey,
+          itemKey: targetKey,
           harvestingDate: harvestForm.harvestingDate,
           numberOfShoot: harvestForm.numberOfShoot,
           shoot1Length: harvestForm.shoot1Length,
@@ -329,7 +343,7 @@ export default function HarvestManagementPage() {
         });
       } else {
         await appendHarvestLog({
-          itemKey,
+          itemKey: targetKey,
           harvestingDate: harvestForm.harvestingDate,
           numberOfShoot: harvestForm.numberOfShoot,
           shoot1Length: harvestForm.shoot1Length,
@@ -357,9 +371,11 @@ export default function HarvestManagementPage() {
         throw new Error("No log record exists yet. Save Harvest first.");
       }
 
+      const targetKey = String(itemKeyUsed || itemKey || "").trim();
+
       await updateHarvestLogByRow({
         rowIndex: harvestRow,
-        itemKey,
+        itemKey: targetKey,
         processingDate: processingForm.processingDate,
         xLarge: processingForm.xLarge,
         large: processingForm.large,
@@ -468,6 +484,11 @@ export default function HarvestManagementPage() {
         <div className="card">
           <div>
             <strong>Scanned Key:</strong> {itemKey}
+            {itemKeyUsed && itemKeyUsed !== itemKey ? (
+              <span style={{ marginLeft: 10, fontSize: 13, opacity: 0.85 }}>
+                (Sheet key: <strong>{itemKeyUsed}</strong>)
+              </span>
+            ) : null}
           </div>
 
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
@@ -573,7 +594,7 @@ export default function HarvestManagementPage() {
           </div>
 
           <div style={{ marginTop: 12 }}>
-            <HarvestCapture itemId={itemKey} />
+            <HarvestCapture itemId={itemKeyUsed || itemKey} />
           </div>
 
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
