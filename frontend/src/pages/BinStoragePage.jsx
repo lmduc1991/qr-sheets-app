@@ -123,6 +123,11 @@ export default function BinStoragePage() {
 
   const scannerRef = useRef(null);
   const scanLockRef = useRef(false);
+  const lastScanRef = useRef({ value: "", ts: 0 });
+
+  // Scan protection
+  const SCAN_LOCK_MS = 800;
+  const DEDUPE_SAME_VALUE_MS = 2500;
 
   const popup = (msg) => {
     // Same behavior as Harvest Management (requires OK)
@@ -158,16 +163,26 @@ export default function BinStoragePage() {
         const v = String(decodedText || "").trim();
         if (!v) return;
 
-        // Prevent double fires / auto re-registering the same QR
+        // Prevent double fires / camera jitter duplicates
+        const now = Date.now();
+
+        // If same QR is detected repeatedly within a short window, ignore it.
+        if (lastScanRef.current.value === v && now - lastScanRef.current.ts < DEDUPE_SAME_VALUE_MS) {
+          return;
+        }
+
+        // Global lock to avoid multiple callbacks firing at once.
         if (scanLockRef.current) return;
         scanLockRef.current = true;
+        lastScanRef.current = { value: v, ts: now };
 
         try {
           await Promise.resolve(onScan(v));
         } finally {
           setTimeout(() => {
             scanLockRef.current = false;
-          }, 600);
+          }, SCAN_LOCK_MS);
+        }
         }
       },
       () => {}
