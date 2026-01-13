@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Html5QrcodeScanner } from "html5-qrcode";
 import { loadSettings, onSettingsChange, saveSettings } from "../store/settingsStore";
-import { getSheetTabs } from "../api/sheetsApi";
+import { getSheetTabs, getUnpackingRecordByLabel, updateUnpackingByRow } from "../api/sheetsApi";
 import { useT } from "../i18n";
 
 function extractSpreadsheetId(url) {
@@ -9,79 +9,96 @@ function extractSpreadsheetId(url) {
   return m ? m[1] : "";
 }
 
-function normHeader(s) {
-  return String(s ?? "")
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, " ");
+function isBlank(v) {
+  return v == null || String(v).trim() === "";
 }
 
-function getFieldCI(obj, headerName) {
-  if (!obj) return "";
-  const target = normHeader(headerName);
-  for (const k of Object.keys(obj)) {
-    if (normHeader(k) === target) return obj[k];
+function pickCI(obj, ...names) {
+  const keys = Object.keys(obj || {});
+  const map = new Map(keys.map((k) => [String(k).trim().toLowerCase(), k]));
+  for (const n of names) {
+    const hit = map.get(String(n).trim().toLowerCase());
+    if (hit) return obj[hit];
   }
   return "";
 }
 
-function hasValue(v) {
-  return v !== undefined && v !== null && String(v).trim() !== "";
-}
+function RecordSummary({ record }) {
+  if (!record) return null;
 
-// Minimal local API caller (keeps this page independent; avoids breaking other pages)
-async function callProxy(action, payload, { timeoutMs = 15000 } = {}) {
-  const s = loadSettings();
-  if (!s?.proxyUrl) throw new Error("Missing Proxy URL. Go to Setup and save settings first.");
+  const whiteCode = pickCI(record, "WHITE CODE", "White Code", "white code");
+  const packingDate = pickCI(record, "PACKING DATE", "Packing Date");
+  const packingQty = pickCI(record, "PACKING QUANTITY", "Packing Quantity");
+  const unpackingDate = pickCI(record, "UNPACKING DATE", "Unpacking Date");
+  const unpackingQty = pickCI(record, "UNPACKING QUANTITY", "Unpacking Quantity");
 
-  const controller = new AbortController();
-  const t = setTimeout(() => controller.abort(), timeoutMs);
-
-  try {
-    const resp = await fetch(s.proxyUrl, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ action, payload }),
-      signal: controller.signal,
-    });
-
-    const data = await resp.json().catch(() => ({}));
-    if (!resp.ok || data?.ok === false) throw new Error(data?.error || `Request failed (${resp.status})`);
-    return data;
-  } catch (e) {
-    if (e?.name === "AbortError") throw new Error("Request timed out. Check internet or Apps Script.");
-    throw e;
-  } finally {
-    clearTimeout(t);
-  }
+  return (
+    <div style={{ display: "grid", gap: 8 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "160px 1fr", gap: 10 }}>
+        <div style={{ fontWeight: 800 }}>White Code</div>
+        <div>{String(whiteCode || "")}</div>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "160px 1fr", gap: 10 }}>
+        <div style={{ fontWeight: 800 }}>Packing Date</div>
+        <div>{String(packingDate || "")}</div>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "160px 1fr", gap: 10 }}>
+        <div style={{ fontWeight: 800 }}>Packing Qty</div>
+        <div>{String(packingQty || "")}</div>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "160px 1fr", gap: 10 }}>
+        <div style={{ fontWeight: 800 }}>Unpacking Date</div>
+        <div>{String(unpackingDate || "")}</div>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "160px 1fr", gap: 10 }}>
+        <div style={{ fontWeight: 800 }}>Unpacking Qty</div>
+        <div>{String(unpackingQty || "")}</div>
+      </div>
+    </div>
+  );
 }
 
 export default function PackingUnpackingManagementPage() {
   const { t, lang } = useT();
   const tt = (en, es, vi) => (lang === "es" ? es : lang === "vi" ? vi : en);
 
-  // Keep settings reactive
+  const MODES = [
+    { id: "or-pack", label: tt("OR-Packing", "OR-Empaque", "OR-Đóng gói"), needs: "or" },
+    { id: "or-unpack", label: tt("OR-Unpacking", "OR-Desempaque", "OR-Mở gói"), needs: "or" },
+    { id: "graft-pack", label: tt("Grafting-Packing", "Injerto-Empaque", "Ghép-Đóng gói"), needs: "grafting" },
+    { id: "graft-unpack", label: tt("Grafting-Unpacking", "Injerto-Desempaque", "Ghép-Mở gói"), needs: "grafting" },
+  ];
+
   const [settings, setSettings] = useState(() => loadSettings());
   useEffect(() => onSettingsChange(setSettings), []);
 
-  const proxyUrl = settings?.proxyUrl || "";
+  const base = useMemo(() => loadSettings(), []);
+  const proxyUrl = settings?.proxyUrl || base?.proxyUrl || "";
 
-  // Setup state
-  const [packingUrl, setPackingUrl] = useState(settings?.packingUrl || "");
-  const [orSheetName, setOrSheetName] = useState(settings?.packingOrSheetName || "");
-  const [graftingSheetName, setGraftingSheetName] = useState(settings?.packingGraftingSheetName || "");
-
+  // Setup
+  const [packingUrl, setPackingUrl] = useState(base?.packingUrl || "");
+  const [orSheetName, setOrSheetName] = useState(base?.packingOrSheetName || "");
+  const [graftingSheetName, setGraftingSheetName] = useState(base?.packingGraftingSheetName || "");
   const [tabs, setTabs] = useState([]);
   const [loadingTabs, setLoadingTabs] = useState(false);
   const [msg, setMsg] = useState("");
   const [error, setError] = useState("");
 
-  const packingSpreadsheetId = useMemo(() => extractSpreadsheetId(packingUrl), [packingUrl]);
+  const packingSpreadsheetId = extractSpreadsheetId(packingUrl);
 
-  // Scanner
-  const scannerRef = useRef(null);
-  const scanLockRef = useRef({ last: "", ts: 0 }); // dedupe
+  // OR-Unpacking operation state
+  const [activeMode, setActiveMode] = useState(null);
+  const [opStatus, setOpStatus] = useState("");
+  const [opError, setOpError] = useState("");
+  const [scannedLabel, setScannedLabel] = useState("");
+  const [record, setRecord] = useState(null);
+  const [recordRow, setRecordRow] = useState(null);
+  const [matchedColumn, setMatchedColumn] = useState(null);
+  const [showForm, setShowForm] = useState(false);
+  const [form, setForm] = useState({ unpackingDate: "", unpackingQuantity: "", noteAppend: "" });
+
   const [isScanning, setIsScanning] = useState(false);
+  const scannerRef = useRef(null);
 
   const stopScanner = async () => {
     if (scannerRef.current) {
@@ -93,42 +110,25 @@ export default function PackingUnpackingManagementPage() {
     setIsScanning(false);
   };
 
-  const startScanner = (elementId, onScan) => {
-    if (scannerRef.current) return;
-
-    const el = document.getElementById(elementId);
-    if (el) el.innerHTML = "";
-
-    const qrbox = Math.min(340, Math.floor(window.innerWidth * 0.8));
-    const scanner = new Html5QrcodeScanner(
-      elementId,
-      { fps: 15, qrbox, experimentalFeatures: { useBarCodeDetectorIfSupported: true } },
-      false
-    );
-
-    scanner.render(
-      async (decodedText) => {
-        const v = String(decodedText || "").trim();
-        if (!v) return;
-
-        // Dedup repeats (2 seconds)
-        const now = Date.now();
-        const last = scanLockRef.current;
-        if (last.last === v && now - last.ts < 2000) return;
-        scanLockRef.current = { last: v, ts: now };
-
-        await onScan(v);
-      },
-      () => {}
-    );
-
-    scannerRef.current = scanner;
-    setIsScanning(true);
+  const resetOperation = async () => {
+    setOpStatus("");
+    setOpError("");
+    setScannedLabel("");
+    setRecord(null);
+    setRecordRow(null);
+    setMatchedColumn(null);
+    setShowForm(false);
+    setForm({ unpackingDate: "", unpackingQuantity: "", noteAppend: "" });
+    await stopScanner();
   };
 
-  // -------------------------
-  // Load tabs / Save setup
-  // -------------------------
+  useEffect(() => {
+    return () => {
+      stopScanner();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const loadTabs = async () => {
     setError("");
     setMsg("");
@@ -164,7 +164,7 @@ export default function PackingUnpackingManagementPage() {
     setMsg(t("packing_setup_saved"));
   };
 
-  const ensureOrTab = () => {
+  const ensureTabForMode = (needs) => {
     if (!packingSpreadsheetId) {
       alert(
         tt(
@@ -175,7 +175,7 @@ export default function PackingUnpackingManagementPage() {
       );
       return false;
     }
-    if (!orSheetName.trim()) {
+    if (needs === "or" && !String(orSheetName || "").trim()) {
       alert(
         tt(
           "OR tab is not set. Choose the OR tab and Save Packing Setup.",
@@ -185,233 +185,158 @@ export default function PackingUnpackingManagementPage() {
       );
       return false;
     }
+    if (needs === "grafting" && !String(graftingSheetName || "").trim()) {
+      alert(
+        tt(
+          "GRAFTING tab is not set. Choose the GRAFTING tab and Save Packing Setup.",
+          "No está configurada la pestaña GRAFTING. Elígela y guarda.",
+          "Chưa thiết lập tab GRAFTING. Chọn tab rồi lưu."
+        )
+      );
+      return false;
+    }
     return true;
   };
 
-  // =====================================================================
-  // OR-Packing Implementation (frontend)
-  // Rule: Scan1 exists in OR tab WHITE CODE; Scan2 must equal Scan1.
-  // =====================================================================
-  const [mode, setMode] = useState(""); // "or-pack" | etc
-  const [step, setStep] = useState("idle"); // idle | or_scan1 | or_scan2 | or_form
-  const [label1, setLabel1] = useState("");
-  const [label2, setLabel2] = useState("");
+  const startMode = async (m) => {
+    if (!ensureTabForMode(m.needs)) return;
+    await resetOperation();
+    setActiveMode(m);
 
-  const [record, setRecord] = useState(null);
-  const [rowIndex, setRowIndex] = useState(null);
+    if (m.id === "or-unpack") {
+      setOpStatus(tt("Ready. Scan 1 label QR (White Code).", "Listo. Escanea 1 QR (White Code).", "Sẵn sàng. Quét 1 QR (White Code)."));
+      return;
+    }
 
-  const [packingDate, setPackingDate] = useState("");
-  const [packingQty, setPackingQty] = useState("");
-  const [note, setNote] = useState("");
-  const [saving, setSaving] = useState(false);
-
-  const resetOrPacking = async () => {
-    await stopScanner();
-    setMode("");
-    setStep("idle");
-    setLabel1("");
-    setLabel2("");
-    setRecord(null);
-    setRowIndex(null);
-    setPackingDate("");
-    setPackingQty("");
-    setNote("");
-    setMsg("");
-    setError("");
-  };
-
-  const beginOrPacking = async () => {
-    if (!ensureOrTab()) return;
-
-    await resetOrPacking();
-    setMode("or-pack");
-    setStep("or_scan1");
-    setMsg(
+    alert(
       tt(
-        "OR-Packing: Scan White Code #1 (must exist in OR tab).",
-        "OR-Empaque: Escanea White Code #1 (debe existir en la pestaña OR).",
-        "OR-Đóng gói: Quét White Code lần 1 (phải tồn tại trong tab OR)."
+        `OK. Next step: implement scanning + forms for "${m.label}".`,
+        `OK. Siguiente paso: implementar escaneo y formularios para "${m.label}".`,
+        `OK. Bước tiếp theo: triển khai quét và form cho "${m.label}".`
       )
     );
-
-    await stopScanner();
-
-    setTimeout(() => {
-      startScanner("or-pack-scan1", async (v1) => {
-        try {
-          await stopScanner();
-          setError("");
-          setMsg(tt("Checking White Code in sheet…", "Verificando White Code…", "Đang kiểm tra White Code…"));
-
-          // Scan1 must exist in OR tab WHITE CODE
-          const r = await callProxy("getPackingRecordByLabel", {
-            spreadsheetId: packingSpreadsheetId,
-            sheetName: orSheetName,
-            needs: "or",
-            labelValue: v1,
-          });
-
-          if (!r?.found) {
-            alert(
-              tt(
-                `Not found. White Code "${v1}" does not exist in OR tab.`,
-                `No encontrado. White Code "${v1}" no existe en la pestaña OR.`,
-                `Không tìm thấy. White Code "${v1}" không tồn tại trong tab OR.`
-              )
-            );
-            // Resume scan1
-            setStep("or_scan1");
-            setMsg("");
-            setTimeout(() => beginOrPacking(), 200);
-            return;
-          }
-
-          setLabel1(String(v1).trim());
-          setRecord(r.record || null);
-          setRowIndex(r.rowIndex || null);
-
-          // Move to Scan2 (confirm same code)
-          setMsg(
-            tt(
-              "Scan the SAME White Code again to confirm (#2).",
-              "Escanea el MISMO White Code para confirmar (#2).",
-              "Quét LẠI đúng White Code để xác nhận (lần 2)."
-            )
-          );
-          setStep("or_scan2");
-          setTimeout(() => beginOrPackingScanSecond(), 100);
-        } catch (e) {
-          setMsg("");
-          setError(e?.message || "Failed to validate White Code.");
-          setStep("or_scan1");
-        }
-      });
-    }, 120);
   };
 
-  // This function belongs to this page and enforces: scan2 === scan1
-  const beginOrPackingScanSecond = async () => {
-    setError("");
-    setMsg(
-      tt(
-        "Scan the SAME White Code again to confirm…",
-        "Escanea el MISMO White Code para confirmar…",
-        "Quét LẠI đúng White Code để xác nhận…"
-      )
+  const startOrUnpackingScan = () => {
+    if (!activeMode || activeMode.id !== "or-unpack") return;
+
+    setOpError("");
+    setOpStatus(tt("Scanning...", "Escaneando...", "Đang quét..."));
+
+    const el = document.getElementById("packing-reader");
+    if (el) el.innerHTML = "";
+
+    const qrbox = Math.min(340, Math.floor(window.innerWidth * 0.8));
+
+    const scanner = new Html5QrcodeScanner(
+      "packing-reader",
+      { fps: 15, qrbox, experimentalFeatures: { useBarCodeDetectorIfSupported: true } },
+      false
     );
-    setLabel2("");
-    setStep("or_scan2");
 
-    await stopScanner();
-
-    setTimeout(() => {
-      startScanner("or-pack-scan2", async (v2) => {
+    scanner.render(
+      async (decodedText) => {
+        const code = String(decodedText || "").trim();
+        if (!code) return;
         await stopScanner();
-        setError("");
+        await onOrUnpackingScanned(code);
+      },
+      () => {}
+    );
 
-        const v2Trim = String(v2 || "").trim();
-        const v1Trim = String(label1 || "").trim();
-
-        // Rule: second scan must equal the first scan (exact match)
-        if (v2Trim !== v1Trim) {
-          alert(
-            tt(
-              "Not matched. The second scan must be the SAME White Code as the first scan. Please scan again.",
-              "No coincide. El segundo escaneo debe ser el MISMO White Code. Reintenta.",
-              "Không khớp. Lần quét thứ hai phải GIỐNG hệt White Code lần đầu. Quét lại."
-            )
-          );
-
-          // Resume scan2
-          setLabel2("");
-          setMsg("");
-          setStep("or_scan2");
-
-          // Restart scan2 scanner
-          setTimeout(() => {
-            beginOrPackingScanSecond();
-          }, 200);
-          return;
-        }
-
-        // Matched
-        setLabel2(v2Trim);
-        setMsg(tt("Matched. Fill Packing Form.", "Coincide. Completa el formulario.", "Khớp. Điền form."));
-
-        // Prefill from record (case-insensitive)
-        const rec = record || {};
-        const pd = getFieldCI(rec, "PACKING DATE");
-        const pq = getFieldCI(rec, "PACKING QUANTITY");
-        if (hasValue(pd)) setPackingDate(String(pd));
-        if (hasValue(pq)) setPackingQty(String(pq));
-
-        setStep("or_form");
-      });
-    }, 120);
+    scannerRef.current = scanner;
+    setIsScanning(true);
   };
 
-  const saveOrPacking = async () => {
-    setError("");
-    setMsg("");
+  const onOrUnpackingScanned = async (label) => {
+    setOpError("");
+    setOpStatus(tt("Looking up record...", "Buscando registro...", "Đang tìm bản ghi..."));
+    setScannedLabel(label);
+    setRecord(null);
+    setRecordRow(null);
+    setMatchedColumn(null);
+    setShowForm(false);
 
-    if (!rowIndex || rowIndex < 2) return setError("Missing rowIndex from sheet record.");
-    if (!hasValue(packingDate)) return setError(tt("Packing Date is required.", "Fecha requerida.", "Cần Packing Date."));
-    if (!hasValue(packingQty)) return setError(tt("Packing Quantity is required.", "Cantidad requerida.", "Cần số lượng."));
-
-    setSaving(true);
     try {
-      const noteAppend = hasValue(note)
-        ? `OR-Packing ${new Date().toISOString().slice(0, 10)} - ${note}`
-        : "";
+      const r = await getUnpackingRecordByLabel({ needs: "or", labelValue: label });
 
-      await callProxy("updatePackingByRow", {
-        spreadsheetId: packingSpreadsheetId,
-        sheetName: orSheetName,
-        needs: "or",
-        rowIndex,
-        packingDate: String(packingDate).trim(),
-        packingQuantity: String(packingQty).trim(),
-        noteAppend,
-      });
+      if (!r?.found) {
+        setOpStatus("");
+        setOpError(
+          tt(
+            `Record not found for: ${label}. Operation cancelled.`,
+            `No se encontró registro para: ${label}. Operación cancelada.`,
+            `Không tìm thấy bản ghi cho: ${label}. Đã hủy thao tác.`
+          )
+        );
+        return;
+      }
 
-      setMsg(
-        tt(
-          "Saved. Ready for next OR-Packing scan.",
-          "Guardado. Listo para el siguiente OR-Empaque.",
-          "Đã lưu. Sẵn sàng quét OR-Đóng gói tiếp theo."
-        )
-      );
+      setRecord(r.record || null);
+      setRecordRow(r.rowIndex || null);
+      setMatchedColumn(r.matchedColumn || null);
 
-      // Reset to scan1 for next item
-      setLabel1("");
-      setLabel2("");
-      setRecord(null);
-      setRowIndex(null);
-      setPackingDate("");
-      setPackingQty("");
-      setNote("");
-      setStep("or_scan1");
+      const unpackDate = pickCI(r.record || {}, "UNPACKING DATE", "Unpacking Date");
+      const unpackQty = pickCI(r.record || {}, "UNPACKING QUANTITY", "Unpacking Quantity");
 
-      // Restart scan1
-      setTimeout(() => beginOrPacking(), 250);
+      if (!isBlank(unpackDate) || !isBlank(unpackQty)) {
+        setOpStatus(tt("Record loaded. Unpacking already exists.", "Registro cargado. Ya existe desempaque.", "Đã tải bản ghi. Đã có mở gói."));
+      } else {
+        setOpStatus(tt("Record loaded. Ready to unpack.", "Registro cargado. Listo para desempacar.", "Đã tải bản ghi. Sẵn sàng mở gói."));
+      }
     } catch (e) {
-      setError(e?.message || "Save failed.");
-    } finally {
-      setSaving(false);
+      setOpStatus("");
+      setOpError(e.message || tt("Lookup failed.", "Falló la búsqueda.", "Tìm kiếm thất bại."));
     }
   };
 
-  // -------------------------
-  // Page rendering
-  // -------------------------
+  const openUnpackingForm = () => {
+    setForm({ unpackingDate: "", unpackingQuantity: "", noteAppend: "" });
+    setShowForm(true);
+  };
+
+  const saveUnpacking = async () => {
+    setOpError("");
+    if (!recordRow) {
+      setOpError(tt("Missing row index. Cancel and scan again.", "Falta el índice de fila. Cancela y escanea de nuevo.", "Thiếu số dòng. Hủy và quét lại."));
+      return;
+    }
+
+    const unpackingDate = String(form.unpackingDate || "").trim();
+    const unpackingQuantity = String(form.unpackingQuantity || "").trim();
+    const noteAppend = String(form.noteAppend || "").trim();
+
+    if (!unpackingDate && !unpackingQuantity && !noteAppend) {
+      setOpError(tt("Enter at least one field.", "Ingresa al menos un campo.", "Nhập ít nhất 1 trường."));
+      return;
+    }
+
+    setOpStatus(tt("Saving...", "Guardando...", "Đang lưu..."));
+
+    try {
+      await updateUnpackingByRow({
+        needs: "or",
+        rowIndex: Number(recordRow),
+        unpackingDate,
+        unpackingQuantity,
+        noteAppend,
+      });
+
+      setOpStatus(tt("Saved. Ready for next scan.", "Guardado. Listo para el próximo escaneo.", "Đã lưu. Sẵn sàng quét tiếp."));
+      await resetOperation();
+    } catch (e) {
+      setOpStatus("");
+      setOpError(e.message || tt("Save failed.", "Falló el guardado.", "Lưu thất bại."));
+    }
+  };
+
   if (!proxyUrl) return <div className="page">{t("please_go_setup_first")}</div>;
 
-  const MODES = [
-    { id: "or-pack", label: tt("OR-Packing", "OR-Empaque", "OR-Đóng gói") },
-    { id: "or-unpack", label: tt("OR-Unpacking", "OR-Desempaque", "OR-Mở gói") },
-    { id: "graft-pack", label: tt("Grafting-Packing", "Injerto-Empaque", "Ghép-Đóng gói") },
-    { id: "graft-unpack", label: tt("Grafting-Unpacking", "Injerto-Desempaque", "Ghép-Mở gói") },
-  ];
+  const unpackingAlreadyExists = (() => {
+    const d = pickCI(record || {}, "UNPACKING DATE", "Unpacking Date");
+    const q = pickCI(record || {}, "UNPACKING QUANTITY", "Unpacking Quantity");
+    return !isBlank(d) || !isBlank(q);
+  })();
 
   return (
     <div className="page" style={{ maxWidth: 900 }}>
@@ -424,7 +349,6 @@ export default function PackingUnpackingManagementPage() {
         </div>
       )}
 
-      {/* Setup */}
       <div className="card">
         <h3>{t("packing_setup_title")}</h3>
 
@@ -475,11 +399,7 @@ export default function PackingUnpackingManagementPage() {
                 ))}
               </select>
             ) : (
-              <input
-                value={graftingSheetName}
-                onChange={(e) => setGraftingSheetName(e.target.value)}
-                placeholder="GRAFTING"
-              />
+              <input value={graftingSheetName} onChange={(e) => setGraftingSheetName(e.target.value)} placeholder="GRAFTING" />
             )}
           </label>
         </div>
@@ -487,125 +407,128 @@ export default function PackingUnpackingManagementPage() {
         <div style={{ fontSize: 12, opacity: 0.85, marginTop: 8 }}>{t("optional_note")}</div>
       </div>
 
-      {/* Operation buttons */}
       <div className="card">
         <h3>{t("choose_operation")}</h3>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
           {MODES.map((m) => (
-            <button
-              key={m.id}
-              onClick={() => {
-                setError("");
-                setMsg("");
-                if (m.id === "or-pack") {
-                  beginOrPacking();
-                } else {
-                  alert(
-                    tt(
-                      "Not implemented yet. We are implementing OR-Packing first.",
-                      "Aún no implementado. Primero implementamos OR-Packing.",
-                      "Chưa triển khai. Đang làm OR-Packing trước."
-                    )
-                  );
-                }
-              }}
-            >
+            <button key={m.id} onClick={() => startMode(m)} className={activeMode?.id === m.id ? "primary" : ""}>
               {m.label}
             </button>
           ))}
-          {mode && (
-            <button onClick={resetOrPacking} style={{ marginLeft: "auto" }}>
-              {tt("Reset", "Reiniciar", "Reset")}
-            </button>
-          )}
         </div>
       </div>
 
-      {/* OR-Packing UI */}
-      {mode === "or-pack" && (
+      {activeMode?.id === "or-unpack" && (
         <div className="card">
-          <h3>{tt("OR-Packing", "OR-Empaque", "OR-Đóng gói")}</h3>
+          <h3>{tt("OR-Unpacking", "OR-Desempaque", "OR-Mở gói")}</h3>
 
-          {step === "or_scan1" && (
-            <>
-              <div style={{ marginBottom: 8, fontWeight: 700 }}>
-                {tt("Step 1: Scan White Code #1", "Paso 1: Escanear White Code #1", "Bước 1: Quét White Code lần 1")}
-              </div>
-              <div id="or-pack-scan1" />
-              {isScanning && (
-                <div style={{ marginTop: 8, fontSize: 12, opacity: 0.85 }}>
-                  {tt("Scanning…", "Escaneando…", "Đang quét…")}
-                </div>
-              )}
-            </>
+          {(opStatus || opError) && (
+            <div style={{ marginBottom: 10 }}>
+              {opStatus && <div className="alert">{opStatus}</div>}
+              {opError && <div className="alert alert-error">{opError}</div>}
+            </div>
           )}
 
-          {step === "or_scan2" && (
+          {!record && (
             <>
-              <div style={{ marginBottom: 8, fontWeight: 700 }}>
+              <div style={{ fontSize: 13, opacity: 0.85, marginBottom: 8 }}>
                 {tt(
-                  "Step 2: Scan SAME White Code again",
-                  "Paso 2: Escanear el MISMO White Code",
-                  "Bước 2: Quét LẠI đúng White Code"
+                  "Scan 1 label QR. It must match WHITE CODE in the OR tab.",
+                  "Escanea 1 QR. Debe coincidir con WHITE CODE en la pestaña OR.",
+                  "Quét 1 QR. Phải khớp WHITE CODE trong tab OR."
                 )}
               </div>
-              <div style={{ marginBottom: 8 }}>
-                <div>
-                  <b>{tt("Scan #1:", "Escaneo #1:", "Quét lần 1:")}</b> {label1 || "-"}
+
+              {!isScanning ? (
+                <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                  <button className="primary" onClick={startOrUnpackingScan}>
+                    {tt("Start Scanning", "Iniciar escaneo", "Bắt đầu quét")}
+                  </button>
+                  <button onClick={resetOperation}>{tt("Cancel", "Cancelar", "Hủy")}</button>
                 </div>
-              </div>
-              <div id="or-pack-scan2" />
-              {isScanning && (
-                <div style={{ marginTop: 8, fontSize: 12, opacity: 0.85 }}>
-                  {tt("Scanning…", "Escaneando…", "Đang quét…")}
-                </div>
+              ) : (
+                <>
+                  <div id="packing-reader" />
+                  <button style={{ marginTop: 10 }} onClick={stopScanner}>
+                    {tt("Stop", "Detener", "Dừng")}
+                  </button>
+                </>
               )}
             </>
           )}
 
-          {step === "or_form" && (
+          {record && !showForm && (
             <>
+              <div style={{ marginBottom: 10, fontSize: 13, opacity: 0.85 }}>
+                {tt("Scanned:", "Escaneado:", "Đã quét:")} <strong>{scannedLabel}</strong>
+                {matchedColumn ? (
+                  <span style={{ marginLeft: 8 }}>
+                    {tt("(matched column:", "(columna coincidente:", "(cột khớp:")} <strong>{matchedColumn}</strong>)
+                  </span>
+                ) : null}
+              </div>
+
+              <RecordSummary record={record} />
+
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 14 }}>
+                {!unpackingAlreadyExists ? (
+                  <button className="primary" onClick={openUnpackingForm}>
+                    {tt("Unpacking", "Desempaque", "Mở gói")}
+                  </button>
+                ) : (
+                  <button className="primary" onClick={openUnpackingForm}>
+                    {tt("Edit Unpacking Form", "Editar desempaque", "Sửa form mở gói")}
+                  </button>
+                )}
+
+                <button onClick={resetOperation}>{tt("Scan Another", "Escanear otro", "Quét mã khác")}</button>
+              </div>
+            </>
+          )}
+
+          {record && showForm && (
+            <>
+              <div style={{ marginTop: 10, marginBottom: 8, fontWeight: 800 }}>
+                {tt("Unpacking Form", "Formulario de desempaque", "Form mở gói")}
+              </div>
+
               <div style={{ display: "grid", gap: 10 }}>
-                <div>
-                  <b>{tt("White Code:", "White Code:", "White Code:")}</b> {label1}
-                </div>
-
                 <label className="field">
-                  {tt("Packing Date", "Fecha de empaque", "Ngày đóng gói")}
-                  <input value={packingDate} onChange={(e) => setPackingDate(e.target.value)} placeholder="YYYY-MM-DD" />
+                  {tt("Unpacking Date", "Fecha de desempaque", "Ngày mở gói")}
+                  <input
+                    type="date"
+                    value={form.unpackingDate}
+                    onChange={(e) => setForm((p) => ({ ...p, unpackingDate: e.target.value }))}
+                  />
                 </label>
 
                 <label className="field">
-                  {tt("Packing Quantity", "Cantidad", "Số lượng")}
-                  <input value={packingQty} onChange={(e) => setPackingQty(e.target.value)} placeholder="e.g. 100" />
+                  {tt("Unpacking Quantity", "Cantidad de desempaque", "Số lượng mở gói")}
+                  <input
+                    type="number"
+                    value={form.unpackingQuantity}
+                    onChange={(e) => setForm((p) => ({ ...p, unpackingQuantity: e.target.value }))}
+                    placeholder="0"
+                  />
                 </label>
 
                 <label className="field">
-                  {tt("Note (optional, append)", "Nota (opcional, anexar)", "Ghi chú (tuỳ chọn, nối thêm)")}
-                  <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={3} placeholder="" />
+                  {tt("Note (append)", "Nota (agregar)", "Ghi chú (nối thêm)")}
+                  <textarea
+                    value={form.noteAppend}
+                    onChange={(e) => setForm((p) => ({ ...p, noteAppend: e.target.value }))}
+                    placeholder={tt("This will append to existing notes.", "Esto se agregará a las notas existentes.", "Sẽ nối vào ghi chú hiện có.")}
+                    rows={4}
+                  />
                 </label>
+              </div>
 
-                <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                  <button onClick={saveOrPacking} disabled={saving}>
-                    {saving ? t("saving") || "Saving..." : t("save") || "Save"}
-                  </button>
-                  <button
-                    onClick={async () => {
-                      setStep("or_scan1");
-                      setMsg("");
-                      setError("");
-                      setLabel1("");
-                      setLabel2("");
-                      setRecord(null);
-                      setRowIndex(null);
-                      await stopScanner();
-                      setTimeout(() => beginOrPacking(), 200);
-                    }}
-                    disabled={saving}
-                  >
-                    {tt("Cancel / Back", "Cancelar / Atrás", "Hủy / Quay lại")}
-                  </button>
-                </div>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 12 }}>
+                <button className="primary" onClick={saveUnpacking}>
+                  {tt("Save", "Guardar", "Lưu")}
+                </button>
+                <button onClick={() => setShowForm(false)}>{tt("Back", "Atrás", "Quay lại")}</button>
+                <button onClick={resetOperation}>{tt("Cancel", "Cancelar", "Hủy")}</button>
               </div>
             </>
           )}
