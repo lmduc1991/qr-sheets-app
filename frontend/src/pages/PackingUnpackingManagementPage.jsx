@@ -121,6 +121,7 @@ export default function PackingUnpackingManagementPage() {
     updateSettings({
       packingUnpackingUrl: sheetLink,
       packingUnpackingSpreadsheetId: id || "", // keep empty if invalid
+      packingSpreadsheetId: id || "", // IMPORTANT compatibility key
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sheetLink]);
@@ -481,7 +482,7 @@ export default function PackingUnpackingManagementPage() {
             <label>{tt("OR tab label", "Etiqueta de pestaña OR", "Tên tab OR")}</label>
             <select
               value={settings?.or_tab_label || ""}
-              onChange={(e) => updateSettings({ or_tab_label: e.target.value })}
+              onChange={(e) => updateSettings({ or_tab_label: e.target.value, packingOrSheetName: e.target.value, // IMPORTANT compatibility key })}
               disabled={loadingTabs || !tabs.length}
             >
               <option value="">
@@ -501,7 +502,7 @@ export default function PackingUnpackingManagementPage() {
               <label>{tt("GRAFTING tab label", "Etiqueta de pestaña GRAFTING", "Tên tab GRAFTING")}</label>
               <select
                 value={settings?.grafting_tab_label || ""}
-                onChange={(e) => updateSettings({ grafting_tab_label: e.target.value })}
+                onChange={(e) => updateSettings({ grafting_tab_label: e.target.value, packingGraftingSheetName: e.target.value, // IMPORTANT compatibility key })}
                 disabled={loadingTabs || !tabs.length}
               >
                 <option value="">
@@ -812,3 +813,4 @@ export default function PackingUnpackingManagementPage() {
     </div>
   );
 }
+
