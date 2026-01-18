@@ -183,7 +183,6 @@ export default function BinStoragePage() {
             scanLockRef.current = false;
           }, SCAN_LOCK_MS);
         }
-        }
       },
       () => {}
     );
@@ -517,3 +516,4 @@ export default function BinStoragePage() {
     </div>
   );
 }
+
