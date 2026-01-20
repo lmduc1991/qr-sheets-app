@@ -1,5 +1,5 @@
 // src/api/sheetsApi.js
-import { loadSettings } from "../store/settingsStore";
+import { loadSettings, saveSettings } from "../store/settingsStore";
 
 const mem = {
   tabs: new Map(),
@@ -26,8 +26,37 @@ function setCached(map, key, data, ttlMs) {
   map.set(key, { data, expiresAt: ttlMs ? now() + ttlMs : 0 });
 }
 
+// ---------- Settings normalization (critical fix) ----------
+function normalizeSettings() {
+  const s = loadSettings() || {};
+
+  // Accept older key names and keep them in sync
+  const itemsKeyColumn = String(s.itemsKeyColumn || s.keyColumn || "").trim();
+
+  // Some pages store itemsSheetName / itemsSpreadsheetId already; keep as-is
+  const itemsSpreadsheetId = String(s.itemsSpreadsheetId || "").trim();
+  const itemsSheetName = String(s.itemsSheetName || "").trim();
+
+  // If we detect the old keyColumn but not itemsKeyColumn, mirror it forward
+  if (itemsKeyColumn && !s.itemsKeyColumn) {
+    try {
+      saveSettings({ itemsKeyColumn }); // merge-safe
+    } catch {
+      // ignore (read-only environments)
+    }
+  }
+
+  return {
+    ...s,
+    itemsSpreadsheetId,
+    itemsSheetName,
+    itemsKeyColumn,
+  };
+}
+
 function requireSettings() {
-  const s = loadSettings();
+  const s = normalizeSettings();
+
   if (!s?.proxyUrl) throw new Error("Proxy URL is not set. Please set it in Setup.");
   if (!s?.itemsSpreadsheetId) throw new Error("Items spreadsheet is not set. Please set it in Setup.");
   if (!s?.itemsSheetName) throw new Error("Items tab is not set. Please set it in Setup.");
@@ -36,7 +65,7 @@ function requireSettings() {
 }
 
 async function callApi(action, payload, opts = {}) {
-  const s = loadSettings();
+  const s = normalizeSettings();
   const proxyUrl = s?.proxyUrl;
   if (!proxyUrl) throw new Error("Proxy URL is not set. Please set it in Setup.");
 
@@ -54,13 +83,36 @@ async function callApi(action, payload, opts = {}) {
     });
 
     const json = await res.json();
-    if (!json?.ok) {
-      throw new Error(json?.error || "Unknown API error");
-    }
+    if (!json?.ok) throw new Error(json?.error || "Unknown API error");
     return json;
   } finally {
     clearTimeout(t);
   }
+}
+
+// ---------- Argument adapters (backward compatible) ----------
+function asObjHeaders(a, b) {
+  // Supports: getHeaders({spreadsheetId, sheetName}) OR getHeaders(spreadsheetId, sheetName)
+  if (a && typeof a === "object") return a;
+  return { spreadsheetId: a, sheetName: b };
+}
+
+function asObjKey(a) {
+  // Supports: fn({keyValue}) OR fn(keyValue)
+  if (a && typeof a === "object") return a;
+  return { keyValue: a };
+}
+
+function asObjUpdateItem(a, b) {
+  // Supports: updateItemByKey({keyValue, patch}) OR updateItemByKey(keyValue, patch)
+  if (a && typeof a === "object") return a;
+  return { keyValue: a, patch: b };
+}
+
+function asObjBulk(a, b) {
+  // Supports: bulkUpdate({keys, patch}) OR bulkUpdate(keys, patch)
+  if (a && typeof a === "object") return a;
+  return { keys: a, patch: b };
 }
 
 // ---------- Tabs ----------
@@ -78,13 +130,19 @@ export async function getSheetTabs(spreadsheetId) {
 }
 
 // ---------- Items ----------
-export async function getHeaders({ spreadsheetId, sheetName }) {
+export async function getHeaders(a, b) {
+  const { spreadsheetId, sheetName } = asObjHeaders(a, b);
+  if (!String(spreadsheetId || "").trim()) throw new Error("Missing or invalid spreadsheet.id");
+  if (!String(sheetName || "").trim()) throw new Error("Missing sheetName");
+
   const r = await callApi("getHeaders", { spreadsheetId, sheetName }, { timeoutMs: 12000 });
   return r.headers || [];
 }
 
-export async function getItemByKey({ keyValue }) {
+export async function getItemByKey(a) {
   const s = requireSettings();
+  const { keyValue } = asObjKey(a);
+
   const key = String(keyValue || "").trim();
   if (!key) throw new Error("Missing key value");
 
@@ -107,8 +165,10 @@ export async function getItemByKey({ keyValue }) {
   return r;
 }
 
-export async function updateItemByKey({ keyValue, patch }) {
+export async function updateItemByKey(a, b) {
   const s = requireSettings();
+  const { keyValue, patch } = asObjUpdateItem(a, b);
+
   const key = String(keyValue || "").trim();
   if (!key) throw new Error("Missing key value");
 
@@ -126,8 +186,10 @@ export async function updateItemByKey({ keyValue, patch }) {
   return r;
 }
 
-export async function bulkUpdate({ keys, patch }) {
+export async function bulkUpdate(a, b) {
   const s = requireSettings();
+  const { keys, patch } = asObjBulk(a, b);
+
   const r = await callApi(
     "bulkUpdate",
     {
@@ -144,15 +206,17 @@ export async function bulkUpdate({ keys, patch }) {
 
 // ---------- Harvest ----------
 function requireHarvestSettings() {
-  const s = loadSettings();
+  const s = normalizeSettings();
   if (!s?.harvestSpreadsheetId) throw new Error("Harvest spreadsheet is not set. Please set it in Harvest page.");
   if (!s?.harvestSheetName) throw new Error("Harvest tab is not set. Please set it in Harvest page.");
   return s;
 }
 
-export async function getItemAndHarvestByKey({ keyValue }) {
+export async function getItemAndHarvestByKey(a) {
   const s = requireSettings();
   const h = requireHarvestSettings();
+  const { keyValue } = asObjKey(a);
+
   const key = String(keyValue || "").trim();
   if (!key) throw new Error("Missing key value");
 
@@ -188,7 +252,7 @@ export async function appendHarvestLog(payload) {
     {
       spreadsheetId: h.harvestSpreadsheetId,
       sheetName: h.harvestSheetName,
-      ...payload,
+      ...(payload || {}),
     },
     { timeoutMs: 15000 }
   );
@@ -219,7 +283,7 @@ export async function updateHarvestLogByRow(payload) {
     {
       spreadsheetId: h.harvestSpreadsheetId,
       sheetName: h.harvestSheetName,
-      ...payload,
+      ...(payload || {}),
     },
     { timeoutMs: 15000 }
   );
@@ -228,7 +292,7 @@ export async function updateHarvestLogByRow(payload) {
 
 // ---------- Storage ----------
 function requireStorageSettings() {
-  const s = loadSettings();
+  const s = normalizeSettings();
   if (!s?.storageSpreadsheetId) throw new Error("Storage spreadsheet is not set. Please set it in Storage pages.");
   if (!s?.bagStorageSheetName) throw new Error("Bag storage tab is not set.");
   if (!s?.binStorageSheetName) throw new Error("Bin storage tab is not set.");
@@ -313,9 +377,8 @@ export async function removeBinStorageByBagLabels({ binLabel, bagLabels }) {
 
 // ---------- Packing / Unpacking ----------
 function requirePackingSettings(needs = "or") {
-  const s = loadSettings() || {};
+  const s = normalizeSettings();
 
-  // Spreadsheet id: accept both old/new keys so the UI and API never get out of sync.
   const spreadsheetId = String(
     s.packingSpreadsheetId ||
       s.packingUnpackingSpreadsheetId ||
@@ -328,7 +391,6 @@ function requirePackingSettings(needs = "or") {
     throw new Error("Packing settings missing. Paste the Packing/Unpacking spreadsheet link first.");
   }
 
-  // Tab name: accept both old/new keys.
   const sheetName =
     needs === "grafting"
       ? String(s.packingGraftingSheetName || s.grafting_tab_label || s.graftingTabLabel || "").trim()
