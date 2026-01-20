@@ -378,8 +378,7 @@ export default function PackingUnpackingManagementPage() {
         const packingQty = getFieldCI(record, "Packing Quantity");
         if (!hasValue(packingQty)) {
           alert("No Packing Record");
-          resetStates();
-          setMode("idle");
+          setOrUnpackState({ step: "idle", code: "", rowIndex: null, record: null });
           return;
         }
 
