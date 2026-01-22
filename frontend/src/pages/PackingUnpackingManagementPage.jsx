@@ -24,12 +24,16 @@ function normCompare(s) {
   return String(s || "").trim().toLowerCase();
 }
 
+function normalizeHeader(s) {
+  return normCompare(s).replace(/\s+/g, " ").trim();
+}
+
+// case-insensitive field getter (also normalizes whitespace)
 function getFieldCI(record, label) {
   if (!record) return "";
-  const target = normCompare(label).replace(/\s+/g, " ");
+  const target = normalizeHeader(label);
   for (const k of Object.keys(record)) {
-    const kk = normCompare(k).replace(/\s+/g, " ");
-    if (kk === target) return record[k];
+    if (normalizeHeader(k) === target) return record[k];
   }
   return "";
 }
@@ -46,10 +50,18 @@ function todayISO() {
   return `${yyyy}-${mm}-${dd}`;
 }
 
+function parseNumberStrict(v) {
+  const s = String(v ?? "").trim();
+  if (!s) return { ok: false, value: 0 };
+  // allow "10", "10.5", " 10 " etc. reject "10a"
+  const n = Number(s);
+  if (!Number.isFinite(n)) return { ok: false, value: 0 };
+  return { ok: true, value: n };
+}
+
 // ---------------- component ----------------
 export default function PackingUnpackingManagementPage() {
   const initial = useMemo(() => loadSettings() || {}, []);
-
   const [settings, setSettings] = useState(initial);
 
   // Packing sheet settings (what sheetsApi.js expects)
@@ -61,22 +73,14 @@ export default function PackingUnpackingManagementPage() {
   }, [settings]);
 
   const orTab = String(
-    settings.packingOrSheetName ||
-      settings.or_tab_label ||
-      settings.orTabLabel ||
-      "OR"
+    settings.packingOrSheetName || settings.or_tab_label || settings.orTabLabel || "OR"
   ).trim();
 
   const graftingTab = String(
-    settings.packingGraftingSheetName ||
-      settings.grafting_tab_label ||
-      settings.graftingTabLabel ||
-      "GRAFTING"
+    settings.packingGraftingSheetName || settings.grafting_tab_label || settings.graftingTabLabel || "GRAFTING"
   ).trim();
 
-  const [packingUrl, setPackingUrl] = useState(
-    settings.packingUrl || settings.packingSheetUrl || ""
-  );
+  const [packingUrl, setPackingUrl] = useState(settings.packingUrl || settings.packingSheetUrl || "");
 
   const [tabs, setTabs] = useState([]);
   const [loadingTabs, setLoadingTabs] = useState(false);
@@ -90,14 +94,21 @@ export default function PackingUnpackingManagementPage() {
   const scanHandlerRef = useRef(null);
 
   // OR Packing state
+  // step meanings:
+  // idle: nothing active
+  // needAction: scanned #1 + record shown; show "Packing" OR show "Edit Packing Form" depending on packed state
+  // need2: waiting for 2nd scan to match
+  // form: packing form open
+  // view: record view after save or after existing packed record
   const [orPackState, setOrPackState] = useState({
-    step: "idle", // idle | scanned1 | need2 | form | view
+    step: "idle",
     code1: "",
     rowIndex: null,
     record: null,
+    isAlreadyPacked: false, // derived at scan #1 time
   });
 
-  // OR Unpacking state
+  // OR Unpacking state (unchanged shape)
   const [orUnpackState, setOrUnpackState] = useState({
     step: "idle", // idle | view | form
     code: "",
@@ -160,11 +171,7 @@ export default function PackingUnpackingManagementPage() {
     // Delay a tick so the div exists
     setTimeout(() => {
       try {
-        const scanner = new Html5QrcodeScanner(
-          "packing_scanner",
-          { fps: 10, qrbox: 250 },
-          false
-        );
+        const scanner = new Html5QrcodeScanner("packing_scanner", { fps: 10, qrbox: 250 }, false);
 
         scanner.render(
           async (decodedText) => {
@@ -187,7 +194,6 @@ export default function PackingUnpackingManagementPage() {
 
   useEffect(() => {
     return () => {
-      // cleanup on unmount
       stopScanner();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -219,7 +225,7 @@ export default function PackingUnpackingManagementPage() {
     }
   };
 
-  // -------- OR Packing flow --------
+  // -------- OR Packing flow (NEW) --------
   const beginOrPacking = async () => {
     setError("");
     setMsg("");
@@ -229,7 +235,7 @@ export default function PackingUnpackingManagementPage() {
     if (!id) return setError("Packing sheet is not set. Paste link and load tabs first.");
     if (!orTab.trim()) return setError("OR tab name is required.");
 
-    setOrPackState({ step: "idle", code1: "", rowIndex: null, record: null });
+    setOrPackState({ step: "idle", code1: "", rowIndex: null, record: null, isAlreadyPacked: false });
 
     await startScanner(async (scanned) => {
       const code1 = String(scanned || "").trim();
@@ -245,55 +251,76 @@ export default function PackingUnpackingManagementPage() {
         });
 
         const res = await getPackingRecordByLabel({ needs: "or", labelValue: code1 });
+
+        // If record does NOT exist: popup -> cancel -> idle
         if (!res?.found) {
           alert("Record not found in OR tab. Operation cancelled.");
-          setOrPackState({ step: "idle", code1: "", rowIndex: null, record: null });
+          setOrPackState({ step: "idle", code1: "", rowIndex: null, record: null, isAlreadyPacked: false });
           return;
         }
+
         const record = res.record || {};
         const rowIndex = res.rowIndex;
 
+        // Look up relevant fields (case-insensitive)
         const packDate = getFieldCI(record, "Packing Date");
         const packQty = getFieldCI(record, "Packing Quantity");
 
+        const isAlreadyPacked = hasValue(packDate) || hasValue(packQty);
 
-
-        if (hasValue(packDate) || hasValue(packQty)) {
-          // already packed -> show record with Edit Packing Form
-          setOrPackState({ step: "view", code1, rowIndex, record });
-          return;
-        }
-
-        // not packed yet -> show record + Packing button (requires scan #2)
-        setOrPackState({ step: "need2", code1, rowIndex, record });
+        // New flow: show record + either "Edit Packing Form" (if already has packing)
+        // or show "Packing" button (if not packed yet)
+        setOrPackState({
+          step: isAlreadyPacked ? "view" : "needAction",
+          code1,
+          rowIndex,
+          record,
+          isAlreadyPacked,
+        });
       } catch (e) {
         setError(e?.message || "Failed to lookup record.");
-        setOrPackState({ step: "idle", code1: "", rowIndex: null, record: null });
+        setOrPackState({ step: "idle", code1: "", rowIndex: null, record: null, isAlreadyPacked: false });
       }
     });
   };
 
-  const beginOrPackingScanSecond = async () => {
+  // User clicks "Packing" button -> require scan #2
+  const beginOrPackingRequireSecondScan = async () => {
     setError("");
     setMsg("");
 
     const { code1, rowIndex, record } = orPackState;
     if (!code1 || !rowIndex) return setError("Missing first scan context. Start OR-Packing again.");
 
+    // enter need2 (so UI reflects waiting for second scan)
+    setOrPackState((s) => ({ ...s, step: "need2" }));
+
     await startScanner(async (scanned2) => {
       const code2 = String(scanned2 || "").trim();
       if (!code2) return setError("Empty QR result.");
 
       if (normCompare(code2) !== normCompare(code1)) {
-        alert("Second QR does not match the first QR. Please re-scan the second label.");
-        // stay in need2 state
-        setOrPackState({ step: "need2", code1, rowIndex, record });
+        // New flow: require user to rescan or cancel back to idle
+        const again = window.confirm(
+          "Second QR does NOT match the first QR.\n\nOK = Re-scan the second label\nCancel = Cancel operation (back to idle)"
+        );
+
+        if (again) {
+          // stay in need2 and reopen scanner
+          setOrPackState({ step: "need2", code1, rowIndex, record, isAlreadyPacked: false });
+          // re-run second scan immediately
+          beginOrPackingRequireSecondScan();
+          return;
+        }
+
+        // cancel to idle
+        setOrPackState({ step: "idle", code1: "", rowIndex: null, record: null, isAlreadyPacked: false });
         return;
       }
 
       // proceed to packing form
       setPackForm({ packingDate: todayISO(), packingQuantity: "", note: "" });
-      setOrPackState({ step: "form", code1, rowIndex, record });
+      setOrPackState({ step: "form", code1, rowIndex, record, isAlreadyPacked: false });
     });
   };
 
@@ -308,6 +335,23 @@ export default function PackingUnpackingManagementPage() {
 
     if (!packForm.packingDate.trim()) return setError("Packing Date is required.");
     if (!String(packForm.packingQuantity || "").trim()) return setError("Packing Quantity is required.");
+
+    // NEW: validate Packing Quantity <= Processing Quantity
+    const processingRaw = getFieldCI(orPackState.record, "Processing Quantity");
+    const pProc = parseNumberStrict(processingRaw);
+    if (!pProc.ok) {
+      return setError('Missing or invalid "Processing Quantity" in the record. Cannot validate packing quantity.');
+    }
+
+    const pPack = parseNumberStrict(packForm.packingQuantity);
+    if (!pPack.ok) {
+      return setError('Invalid "Packing Quantity". Please enter a numeric value.');
+    }
+
+    if (pPack.value > pProc.value) {
+      alert(`Packing Quantity (${pPack.value}) cannot be greater than Processing Quantity (${pProc.value}).`);
+      return;
+    }
 
     try {
       updateSettings({
@@ -333,17 +377,18 @@ export default function PackingUnpackingManagementPage() {
         code1: orPackState.code1,
         rowIndex: res?.rowIndex || orPackState.rowIndex,
         record: res?.record || orPackState.record,
+        isAlreadyPacked: true,
       });
     } catch (e) {
       setError(e?.message || "Failed to save packing.");
     }
   };
 
-  // -------- OR Unpacking flow --------
+  // -------- OR Unpacking flow (kept same behavior) --------
   const beginOrUnpacking = async () => {
     setError("");
     setMsg("");
-    setOrPackState({ step: "idle", code1: "", rowIndex: null, record: null });
+    setOrPackState({ step: "idle", code1: "", rowIndex: null, record: null, isAlreadyPacked: false });
 
     const id = packingSpreadsheetId || extractSpreadsheetId(packingUrl);
     if (!id) return setError("Packing sheet is not set. Paste link and load tabs first.");
@@ -372,9 +417,7 @@ export default function PackingUnpackingManagementPage() {
         const record = res.record || {};
         const rowIndex = res.rowIndex;
 
-        // NEW OR-Unpacking flow requirement:
         // Unpacking is only allowed if a packing record exists.
-        // We use "Packing Quantity" presence as the gate.
         const packingQty = getFieldCI(record, "Packing Quantity");
         if (!hasValue(packingQty)) {
           alert("No Packing Record");
@@ -382,15 +425,6 @@ export default function PackingUnpackingManagementPage() {
           return;
         }
 
-        const unpackDate = getFieldCI(record, "Unpacking Date");
-        const unpackQty = getFieldCI(record, "Unpacking Quantity");
-
-        if (hasValue(unpackDate) || hasValue(unpackQty)) {
-          setOrUnpackState({ step: "view", code, rowIndex, record });
-          return;
-        }
-
-        // not unpacked yet -> show Unpacking button -> go to form
         setOrUnpackState({ step: "view", code, rowIndex, record });
       } catch (e) {
         setError(e?.message || "Failed to lookup record.");
@@ -448,7 +482,6 @@ export default function PackingUnpackingManagementPage() {
   // -------- UI helpers --------
   const renderRecord = (record) => {
     if (!record) return null;
-    // show a compact subset first; you can expand later
     const keys = Object.keys(record);
     return (
       <div className="card" style={{ marginTop: 10 }}>
@@ -465,7 +498,6 @@ export default function PackingUnpackingManagementPage() {
     );
   };
 
-  // Determine if OR record already has unpack info
   const orUnpackHasData = useMemo(() => {
     const r = orUnpackState.record;
     if (!r) return false;
@@ -503,20 +535,19 @@ export default function PackingUnpackingManagementPage() {
               value={orTab}
               onChange={(e) =>
                 updateSettings({
-                  // sheetsApi expected
                   packingOrSheetName: e.target.value,
-                  // keep your existing key too
                   or_tab_label: e.target.value,
                 })
               }
               disabled={loadingTabs || !tabs.length}
             >
               {!tabs.length && <option value={orTab}>{orTab}</option>}
-              {tabs.length > 0 && tabs.map((t) => (
-                <option key={t} value={t}>
-                  {t}
-                </option>
-              ))}
+              {tabs.length > 0 &&
+                tabs.map((t) => (
+                  <option key={t} value={t}>
+                    {t}
+                  </option>
+                ))}
             </select>
           </label>
 
@@ -533,18 +564,20 @@ export default function PackingUnpackingManagementPage() {
               disabled={loadingTabs || !tabs.length}
             >
               {!tabs.length && <option value={graftingTab}>{graftingTab}</option>}
-              {tabs.length > 0 && tabs.map((t) => (
-                <option key={t} value={t}>
-                  {t}
-                </option>
-              ))}
+              {tabs.length > 0 &&
+                tabs.map((t) => (
+                  <option key={t} value={t}>
+                    {t}
+                  </option>
+                ))}
             </select>
           </label>
         </div>
 
         <div style={{ fontSize: 12, opacity: 0.8, marginTop: 8 }}>
-          This page uses your Apps Script actions: <strong>getPackingRecordByLabel</strong>, <strong>updatePackingByRow</strong>,{" "}
-          <strong>getUnpackingRecordByLabel</strong>, <strong>updateUnpackingByRow</strong>.
+          This page uses your Apps Script actions: <strong>getPackingRecordByLabel</strong>,{" "}
+          <strong>updatePackingByRow</strong>, <strong>getUnpackingRecordByLabel</strong>,{" "}
+          <strong>updateUnpackingByRow</strong>.
         </div>
       </div>
 
@@ -566,53 +599,65 @@ export default function PackingUnpackingManagementPage() {
           <button onClick={beginOrPacking}>OR-Packing</button>
           <button onClick={beginOrUnpacking}>OR-Unpacking</button>
 
-          {/* leaving placeholders for later */}
+          {/* placeholders */}
           <button disabled>Grafting-Packing</button>
           <button disabled>Grafting-Unpacking</button>
         </div>
       </div>
 
       {/* OR-Packing UI */}
-      {(orPackState.step !== "idle") && (
+      {orPackState.step !== "idle" && (
         <div style={{ marginTop: 12 }}>
           <div className="card">
             <h3>OR-Packing</h3>
+
             <div style={{ fontSize: 13, opacity: 0.85 }}>
               First QR: <strong>{orPackState.code1 || "-"}</strong>
             </div>
 
-            {orPackState.step === "need2" && (
-              <div style={{ marginTop: 10 }}>
-                <button className="primary" onClick={beginOrPackingScanSecond}>
-                  Packing (Scan 2nd QR)
+            {/* New flow: if not packed yet -> show "Packing" button (then scan 2nd) */}
+            {orPackState.step === "needAction" && (
+              <div style={{ marginTop: 10, display: "flex", gap: 10, flexWrap: "wrap" }}>
+                <button className="primary" onClick={beginOrPackingRequireSecondScan}>
+                  Packing
+                </button>
+                <button onClick={() => setOrPackState({ step: "idle", code1: "", rowIndex: null, record: null, isAlreadyPacked: false })}>
+                  Cancel
                 </button>
               </div>
             )}
 
-            {orPackState.step === "view" && (
+            {/* Waiting for scan #2 */}
+            {orPackState.step === "need2" && (
               <div style={{ marginTop: 10 }}>
+                <div className="alert">
+                  Scan the <strong>second label QR</strong> (must match the first QR).
+                </div>
+              </div>
+            )}
+
+            {/* Packed already or after save: show Edit button */}
+            {orPackState.step === "view" && (
+              <div style={{ marginTop: 10, display: "flex", gap: 10, flexWrap: "wrap" }}>
                 <button
                   className="primary"
                   onClick={() => {
-                    setPackForm({
-                      packingDate: todayISO(),
-                      packingQuantity: "",
-                      note: "",
-                    });
+                    setPackForm({ packingDate: todayISO(), packingQuantity: "", note: "" });
                     setOrPackState((s) => ({ ...s, step: "form" }));
                   }}
                 >
                   Edit Packing Form
                 </button>
+
                 <button
-                  style={{ marginLeft: 10 }}
-                  onClick={() => setOrPackState({ step: "idle", code1: "", rowIndex: null, record: null })}
+                  onClick={() => setOrPackState({ step: "idle", code1: "", rowIndex: null, record: null, isAlreadyPacked: false })}
                 >
                   Done
                 </button>
               </div>
             )}
 
+            {/* Packing Form */}
             {orPackState.step === "form" && (
               <div className="card" style={{ marginTop: 12 }}>
                 <h4>Packing Form</h4>
@@ -644,11 +689,15 @@ export default function PackingUnpackingManagementPage() {
                   />
                 </label>
 
-                <div style={{ display: "flex", gap: 10 }}>
+                <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
                   <button className="primary" onClick={saveOrPacking}>
                     Save Packing
                   </button>
                   <button onClick={() => setOrPackState((s) => ({ ...s, step: "view" }))}>Cancel</button>
+                </div>
+
+                <div style={{ marginTop: 10, fontSize: 12, opacity: 0.8 }}>
+                  Validation: Packing Quantity cannot exceed Processing Quantity.
                 </div>
               </div>
             )}
@@ -659,7 +708,7 @@ export default function PackingUnpackingManagementPage() {
       )}
 
       {/* OR-Unpacking UI */}
-      {(orUnpackState.step !== "idle") && (
+      {orUnpackState.step !== "idle" && (
         <div style={{ marginTop: 12 }}>
           <div className="card">
             <h3>OR-Unpacking</h3>
@@ -668,7 +717,7 @@ export default function PackingUnpackingManagementPage() {
             </div>
 
             {orUnpackState.step === "view" && (
-              <div style={{ marginTop: 10 }}>
+              <div style={{ marginTop: 10, display: "flex", gap: 10, flexWrap: "wrap" }}>
                 {orUnpackHasData ? (
                   <button className="primary" onClick={goToUnpackForm}>
                     Edit Unpacking Form
@@ -679,10 +728,7 @@ export default function PackingUnpackingManagementPage() {
                   </button>
                 )}
 
-                <button
-                  style={{ marginLeft: 10 }}
-                  onClick={() => setOrUnpackState({ step: "idle", code: "", rowIndex: null, record: null })}
-                >
+                <button onClick={() => setOrUnpackState({ step: "idle", code: "", rowIndex: null, record: null })}>
                   Done
                 </button>
               </div>
@@ -719,7 +765,7 @@ export default function PackingUnpackingManagementPage() {
                   />
                 </label>
 
-                <div style={{ display: "flex", gap: 10 }}>
+                <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
                   <button className="primary" onClick={saveOrUnpacking}>
                     Save Unpacking
                   </button>
