@@ -26,23 +26,21 @@ function setCached(map, key, data, ttlMs) {
   map.set(key, { data, expiresAt: ttlMs ? now() + ttlMs : 0 });
 }
 
-// ---------- Settings normalization (critical fix) ----------
+// ---------- Settings normalization (critical compatibility layer) ----------
 function normalizeSettings() {
   const s = loadSettings() || {};
 
   // Accept older key names and keep them in sync
   const itemsKeyColumn = String(s.itemsKeyColumn || s.keyColumn || "").trim();
-
-  // Some pages store itemsSheetName / itemsSpreadsheetId already; keep as-is
   const itemsSpreadsheetId = String(s.itemsSpreadsheetId || "").trim();
   const itemsSheetName = String(s.itemsSheetName || "").trim();
 
-  // If we detect the old keyColumn but not itemsKeyColumn, mirror it forward
+  // Mirror forward if only old key exists
   if (itemsKeyColumn && !s.itemsKeyColumn) {
     try {
-      saveSettings({ itemsKeyColumn }); // merge-safe
+      saveSettings({ itemsKeyColumn });
     } catch {
-      // ignore (read-only environments)
+      // ignore
     }
   }
 
@@ -56,7 +54,6 @@ function normalizeSettings() {
 
 function requireSettings() {
   const s = normalizeSettings();
-
   if (!s?.proxyUrl) throw new Error("Proxy URL is not set. Please set it in Setup.");
   if (!s?.itemsSpreadsheetId) throw new Error("Items spreadsheet is not set. Please set it in Setup.");
   if (!s?.itemsSheetName) throw new Error("Items tab is not set. Please set it in Setup.");
@@ -132,6 +129,7 @@ export async function getSheetTabs(spreadsheetId) {
 // ---------- Items ----------
 export async function getHeaders(a, b) {
   const { spreadsheetId, sheetName } = asObjHeaders(a, b);
+
   if (!String(spreadsheetId || "").trim()) throw new Error("Missing or invalid spreadsheet.id");
   if (!String(sheetName || "").trim()) throw new Error("Missing sheetName");
 
@@ -228,15 +226,8 @@ export async function getItemAndHarvestByKey(a) {
     "getItemAndHarvestByKey",
     {
       keyValue: key,
-      items: {
-        spreadsheetId: s.itemsSpreadsheetId,
-        sheetName: s.itemsSheetName,
-        keyColumn: s.itemsKeyColumn,
-      },
-      harvest: {
-        spreadsheetId: h.harvestSpreadsheetId,
-        sheetName: h.harvestSheetName,
-      },
+      items: { spreadsheetId: s.itemsSpreadsheetId, sheetName: s.itemsSheetName, keyColumn: s.itemsKeyColumn },
+      harvest: { spreadsheetId: h.harvestSpreadsheetId, sheetName: h.harvestSheetName },
     },
     { timeoutMs: 15000 }
   );
@@ -249,11 +240,7 @@ export async function appendHarvestLog(payload) {
   const h = requireHarvestSettings();
   const r = await callApi(
     "appendHarvestLog",
-    {
-      spreadsheetId: h.harvestSpreadsheetId,
-      sheetName: h.harvestSheetName,
-      ...(payload || {}),
-    },
+    { spreadsheetId: h.harvestSpreadsheetId, sheetName: h.harvestSheetName, ...(payload || {}) },
     { timeoutMs: 15000 }
   );
   return r;
@@ -266,11 +253,7 @@ export async function getHarvestLogByKey(itemKey) {
 
   const r = await callApi(
     "getHarvestLogByKey",
-    {
-      spreadsheetId: h.harvestSpreadsheetId,
-      sheetName: h.harvestSheetName,
-      itemKey: key,
-    },
+    { spreadsheetId: h.harvestSpreadsheetId, sheetName: h.harvestSheetName, itemKey: key },
     { timeoutMs: 12000 }
   );
   return r;
@@ -280,11 +263,7 @@ export async function updateHarvestLogByRow(payload) {
   const h = requireHarvestSettings();
   const r = await callApi(
     "updateHarvestLogByRow",
-    {
-      spreadsheetId: h.harvestSpreadsheetId,
-      sheetName: h.harvestSheetName,
-      ...(payload || {}),
-    },
+    { spreadsheetId: h.harvestSpreadsheetId, sheetName: h.harvestSheetName, ...(payload || {}) },
     { timeoutMs: 15000 }
   );
   return r;
@@ -303,12 +282,7 @@ export async function appendBagStorage({ bagLabel, vineIds }) {
   const s = requireStorageSettings();
   const r = await callApi(
     "appendBagStorage",
-    {
-      spreadsheetId: s.storageSpreadsheetId,
-      sheetName: s.bagStorageSheetName,
-      bagLabel,
-      vineIds,
-    },
+    { spreadsheetId: s.storageSpreadsheetId, sheetName: s.bagStorageSheetName, bagLabel, vineIds },
     { timeoutMs: 15000 }
   );
   return r;
@@ -318,12 +292,7 @@ export async function appendBinStorage({ binLabel, bagLabels }) {
   const s = requireStorageSettings();
   const r = await callApi(
     "appendBinStorage",
-    {
-      spreadsheetId: s.storageSpreadsheetId,
-      sheetName: s.binStorageSheetName,
-      binLabel,
-      bagLabels,
-    },
+    { spreadsheetId: s.storageSpreadsheetId, sheetName: s.binStorageSheetName, binLabel, bagLabels },
     { timeoutMs: 15000 }
   );
   return r;
@@ -335,12 +304,7 @@ export async function getExistingChildrenForParent({ mode, parentLabel }) {
 
   const r = await callApi(
     "getExistingChildrenForParent",
-    {
-      spreadsheetId: s.storageSpreadsheetId,
-      sheetName,
-      mode,
-      parentLabel,
-    },
+    { spreadsheetId: s.storageSpreadsheetId, sheetName, mode, parentLabel },
     { timeoutMs: 12000 }
   );
   return r.children || [];
@@ -350,11 +314,7 @@ export async function findBinForBagLabel({ bagLabel }) {
   const s = requireStorageSettings();
   const r = await callApi(
     "findBinForBagLabel",
-    {
-      spreadsheetId: s.storageSpreadsheetId,
-      sheetName: s.binStorageSheetName,
-      bagLabel,
-    },
+    { spreadsheetId: s.storageSpreadsheetId, sheetName: s.binStorageSheetName, bagLabel },
     { timeoutMs: 12000 }
   );
   return r;
@@ -364,12 +324,7 @@ export async function removeBinStorageByBagLabels({ binLabel, bagLabels }) {
   const s = requireStorageSettings();
   const r = await callApi(
     "removeBinStorageByBagLabels",
-    {
-      spreadsheetId: s.storageSpreadsheetId,
-      sheetName: s.binStorageSheetName,
-      binLabel,
-      bagLabels,
-    },
+    { spreadsheetId: s.storageSpreadsheetId, sheetName: s.binStorageSheetName, binLabel, bagLabels },
     { timeoutMs: 20000 }
   );
   return r;
@@ -380,25 +335,17 @@ function requirePackingSettings(needs = "or") {
   const s = normalizeSettings();
 
   const spreadsheetId = String(
-    s.packingSpreadsheetId ||
-      s.packingUnpackingSpreadsheetId ||
-      s.packingUnpackingId ||
-      s.packingSpreadsheetID ||
-      ""
+    s.packingSpreadsheetId || s.packingUnpackingSpreadsheetId || s.packingUnpackingId || s.packingSpreadsheetID || ""
   ).trim();
 
-  if (!spreadsheetId) {
-    throw new Error("Packing settings missing. Paste the Packing/Unpacking spreadsheet link first.");
-  }
+  if (!spreadsheetId) throw new Error("Packing settings missing. Paste the Packing/Unpacking spreadsheet link first.");
 
   const sheetName =
     needs === "grafting"
       ? String(s.packingGraftingSheetName || s.grafting_tab_label || s.graftingTabLabel || "").trim()
       : String(s.packingOrSheetName || s.or_tab_label || s.orTabLabel || "").trim();
 
-  if (!sheetName) {
-    throw new Error(needs === "grafting" ? "Grafting tab is not set." : "OR tab is not set.");
-  }
+  if (!sheetName) throw new Error(needs === "grafting" ? "Grafting tab is not set." : "OR tab is not set.");
 
   return { ...s, packingSpreadsheetId: spreadsheetId, _packingSheetName: sheetName };
 }
@@ -411,12 +358,7 @@ export async function getPackingRecordByLabel({ needs = "or", labelValue }) {
 
   const r = await callApi(
     "getPackingRecordByLabel",
-    {
-      spreadsheetId: s.packingSpreadsheetId,
-      sheetName: s._packingSheetName,
-      needs,
-      labelValue,
-    },
+    { spreadsheetId: s.packingSpreadsheetId, sheetName: s._packingSheetName, needs, labelValue },
     { timeoutMs: 12000 }
   );
 
@@ -428,15 +370,7 @@ export async function updatePackingByRow({ needs = "or", rowIndex, packingDate, 
   const s = requirePackingSettings(needs);
   const r = await callApi(
     "updatePackingByRow",
-    {
-      spreadsheetId: s.packingSpreadsheetId,
-      sheetName: s._packingSheetName,
-      needs,
-      rowIndex,
-      packingDate,
-      packingQuantity,
-      noteAppend,
-    },
+    { spreadsheetId: s.packingSpreadsheetId, sheetName: s._packingSheetName, needs, rowIndex, packingDate, packingQuantity, noteAppend },
     { timeoutMs: 15000 }
   );
   return r;
@@ -450,12 +384,7 @@ export async function getUnpackingRecordByLabel({ needs = "or", labelValue }) {
 
   const r = await callApi(
     "getUnpackingRecordByLabel",
-    {
-      spreadsheetId: s.packingSpreadsheetId,
-      sheetName: s._packingSheetName,
-      needs,
-      labelValue,
-    },
+    { spreadsheetId: s.packingSpreadsheetId, sheetName: s._packingSheetName, needs, labelValue },
     { timeoutMs: 12000 }
   );
 
@@ -467,15 +396,7 @@ export async function updateUnpackingByRow({ needs = "or", rowIndex, unpackingDa
   const s = requirePackingSettings(needs);
   const r = await callApi(
     "updateUnpackingByRow",
-    {
-      spreadsheetId: s.packingSpreadsheetId,
-      sheetName: s._packingSheetName,
-      needs,
-      rowIndex,
-      unpackingDate,
-      unpackingQuantity,
-      noteAppend,
-    },
+    { spreadsheetId: s.packingSpreadsheetId, sheetName: s._packingSheetName, needs, rowIndex, unpackingDate, unpackingQuantity, noteAppend },
     { timeoutMs: 15000 }
   );
   return r;
