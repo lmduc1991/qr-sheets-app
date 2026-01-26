@@ -154,7 +154,7 @@ export default function PackingUnpackingManagementPage() {
   // Forms (shared)
   const [packForm, setPackForm] = useState({
     packingDate: todayISO(),
-    binNumber: \"\",
+    binNumber: "",
     packingQuantity: "",
     note: "",
   });
