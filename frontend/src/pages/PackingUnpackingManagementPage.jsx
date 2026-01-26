@@ -154,7 +154,6 @@ export default function PackingUnpackingManagementPage() {
   // Forms (shared)
   const [packForm, setPackForm] = useState({
     packingDate: todayISO(),
-    binNumber: "",
     packingQuantity: "",
     note: "",
   });
@@ -342,7 +341,7 @@ export default function PackingUnpackingManagementPage() {
         return;
       }
 
-      setPackForm({ packingDate: todayISO(), binNumber: "", packingQuantity: "", note: "" });
+      setPackForm({ packingDate: todayISO(), packingQuantity: "", note: "" });
       setOrPackState({ step: "form", code1, rowIndex, record, isAlreadyPacked: false });
     });
   };
@@ -357,7 +356,6 @@ export default function PackingUnpackingManagementPage() {
     if (!orPackState.rowIndex) return setError("Missing rowIndex.");
 
     if (!packForm.packingDate.trim()) return setError("Packing Date is required.");
-    if (!String(packForm.binNumber || "").trim()) return setError("Bin # is required.");
     if (!String(packForm.packingQuantity || "").trim()) return setError("Packing Quantity is required.");
 
     const processingRaw = getFieldCI(orPackState.record, "Processing Quantity");
@@ -389,7 +387,6 @@ export default function PackingUnpackingManagementPage() {
         needs: "or",
         rowIndex: orPackState.rowIndex,
         packingDate: packForm.packingDate.trim(),
-        binNumber: String(packForm.binNumber || "").trim(),
         packingQuantity: String(packForm.packingQuantity).trim(),
         noteAppend: String(packForm.note || "").trim(),
       });
@@ -534,89 +531,59 @@ export default function PackingUnpackingManagementPage() {
     }
   };
 
-  
-// -------- Grafting Packing flow --------
-const beginGraftingPacking = async () => {
-  setError("");
-  setMsg("");
+  // -------- Grafting Packing flow --------
+  const beginGraftingPacking = async () => {
+    setError("");
+    setMsg("");
+    setOrPackState({ step: "idle", code1: "", rowIndex: null, record: null, isAlreadyPacked: false });
+    setOrUnpackState({ step: "idle", code: "", rowIndex: null, record: null });
+    setGraftUnpackState({ step: "idle", code: "", rowIndex: null, record: null });
 
-  // reset other flows
-  setOrPackState({ step: "idle", code1: "", rowIndex: null, record: null, isAlreadyPacked: false });
-  setOrUnpackState({ step: "idle", code: "", rowIndex: null, record: null });
-  setGraftUnpackState({ step: "idle", code: "", rowIndex: null, record: null });
+    const id = packingSpreadsheetId || extractSpreadsheetId(packingUrl);
+    if (!id) return setError("Packing sheet is not set. Paste link and load tabs first.");
+    if (!graftingTab.trim()) return setError("Grafting tab name is required.");
 
-  const id = packingSpreadsheetId || extractSpreadsheetId(packingUrl);
-  if (!id) return setError("Packing sheet is not set. Paste link and load tabs first.");
-  if (!graftingTab.trim()) return setError("Grafting tab name is required.");
+    setGraftPackState({ step: "scion", scionCode: "", rootstockCode: "", comboCode: "", rowIndex: null, record: null, isAlreadyPacked: false });
 
-  // initial state
-  setGraftPackState({
-    step: "scion",
-    scionCode: "",
-    rootstockCode: "",
-    comboCode: "",
-    rowIndex: null,
-    record: null,
-    isAlreadyPacked: false,
-  });
+    await startScanner(async (scannedScion) => {
+      const scionCode = String(scannedScion || "").trim();
+      if (!scionCode) return setError("Empty QR result.");
 
-  await startScanner(async (scannedScion) => {
-    const scionCode = String(scannedScion || "").trim();
-    if (!scionCode) return setError("Empty QR result.");
-
-    try {
-      updateSettings({
-        packingSpreadsheetId: id,
-        packingGraftingSheetName: graftingTab.trim(),
-        grafting_tab_label: graftingTab.trim(),
-      });
-
-      const res1 = await getPackingRecordByLabel({ needs: "grafting", labelValue: scionCode });
-      if (!res1?.found) {
-        alert("Scion label not found in Grafting tab. Operation cancelled.");
-        setGraftPackState({
-          step: "idle",
-          scionCode: "",
-          rootstockCode: "",
-          comboCode: "",
-          rowIndex: null,
-          record: null,
-          isAlreadyPacked: false,
+      try {
+        updateSettings({
+          packingSpreadsheetId: id,
+          packingGraftingSheetName: graftingTab.trim(),
+          grafting_tab_label: graftingTab.trim(),
         });
-        return;
-      }
 
-      const record1 = res1.record || {};
-      const rowIndex1 = res1.rowIndex;
+        const res1 = await getPackingRecordByLabel({ needs: "grafting", labelValue: scionCode });
+        if (!res1?.found) {
+          alert("Scion label not found in Grafting tab. Operation cancelled.");
+          setGraftPackState({ step: "idle", scionCode: "", rootstockCode: "", comboCode: "", rowIndex: null, record: null, isAlreadyPacked: false });
+          return;
+        }
 
-      setGraftPackState({
-        step: "rootstock",
-        scionCode,
-        rootstockCode: "",
-        comboCode: "",
-        rowIndex: rowIndex1,
-        record: record1,
-        isAlreadyPacked: false,
-      });
+        const record1 = res1.record || {};
+        const rowIndex1 = res1.rowIndex;
 
-      const scanRootstock = async () => {
-        await startScanner(async (scannedRoot) => {
+        setGraftPackState({ step: "rootstock", scionCode, rootstockCode: "", comboCode: "", rowIndex: rowIndex1, record: record1, isAlreadyPacked: false });
+
+        const scanRootstock = async () => {
+          await startScanner(async (scannedRoot) => {async (scannedRoot) => {
           const rootstockCode = String(scannedRoot || "").trim();
           if (!rootstockCode) return setError("Empty QR result.");
+
+          if (String(rootstockCode).trim().toLowerCase() === String(scionCode).trim().toLowerCase()) {
+            alert("Scion QR and Rootstock QR cannot be the same. Please scan the correct Rootstock label.");
+            setGraftPackState((s) => ({ ...s, step: "rootstock", rootstockCode: "" }));
+            return;
+          }
 
           try {
             const res2 = await getPackingRecordByLabel({ needs: "grafting", labelValue: rootstockCode });
             if (!res2?.found) {
               alert("Rootstock label not found in Grafting tab. Operation cancelled.");
-              setGraftPackState({
-                step: "idle",
-                scionCode: "",
-                rootstockCode: "",
-                comboCode: "",
-                rowIndex: null,
-                record: null,
-                isAlreadyPacked: false,
-              });
+              setGraftPackState({ step: "idle", scionCode: "", rootstockCode: "", comboCode: "", rowIndex: null, record: null, isAlreadyPacked: false });
               return;
             }
 
@@ -628,31 +595,17 @@ const beginGraftingPacking = async () => {
               );
 
               if (again) {
-                setGraftPackState({
-                  step: "rootstock",
-                  scionCode,
-                  rootstockCode: "",
-                  comboCode: "",
-                  rowIndex: rowIndex1,
-                  record: record1,
-                  isAlreadyPacked: false,
-                });
+                setGraftPackState({ step: "rootstock", scionCode, rootstockCode: "", comboCode: "", rowIndex: rowIndex1, record: record1, isAlreadyPacked: false });
+                // restart only the rootstock scan
                 await scanRootstock();
                 return;
               }
 
-              setGraftPackState({
-                step: "idle",
-                scionCode: "",
-                rootstockCode: "",
-                comboCode: "",
-                rowIndex: null,
-                record: null,
-                isAlreadyPacked: false,
-              });
+              setGraftPackState({ step: "idle", scionCode: "", rootstockCode: "", comboCode: "", rowIndex: null, record: null, isAlreadyPacked: false });
               return;
             }
 
+            // Use record from the matched row
             const record = record1;
 
             const packDate = getFieldCI(record, "Packing Date");
@@ -667,39 +620,23 @@ const beginGraftingPacking = async () => {
               rowIndex: rowIndex1,
               record,
               isAlreadyPacked,
-            });
+              });
+        };
+
+        await scanRootstock();
           } catch (e) {
             setError(e?.message || "Failed to lookup rootstock record.");
-            setGraftPackState({
-              step: "idle",
-              scionCode: "",
-              rootstockCode: "",
-              comboCode: "",
-              rowIndex: null,
-              record: null,
-              isAlreadyPacked: false,
-            });
+            setGraftPackState({ step: "idle", scionCode: "", rootstockCode: "", comboCode: "", rowIndex: null, record: null, isAlreadyPacked: false });
           }
         });
-      };
+      } catch (e) {
+        setError(e?.message || "Failed to lookup scion record.");
+        setGraftPackState({ step: "idle", scionCode: "", rootstockCode: "", comboCode: "", rowIndex: null, record: null, isAlreadyPacked: false });
+      }
+    });
+  };
 
-      await scanRootstock();
-    } catch (e) {
-      setError(e?.message || "Failed to lookup scion record.");
-      setGraftPackState({
-        step: "idle",
-        scionCode: "",
-        rootstockCode: "",
-        comboCode: "",
-        rowIndex: null,
-        record: null,
-        isAlreadyPacked: false,
-      });
-    }
-  });
-};
-
-const beginGraftingPackingRequireCombo = async () => {
+  const beginGraftingPackingRequireCombo = async () => {
     setError("");
     setMsg("");
 
@@ -738,7 +675,7 @@ const beginGraftingPackingRequireCombo = async () => {
           return;
         }
 
-        setPackForm({ packingDate: todayISO(), binNumber: "", packingQuantity: "", note: "" });
+        setPackForm({ packingDate: todayISO(), packingQuantity: "", note: "" });
         setGraftPackState({ step: "form", scionCode, rootstockCode, comboCode, rowIndex, record, isAlreadyPacked: false });
       } catch (e) {
         setError(e?.message || "Failed to verify combination label.");
@@ -757,7 +694,6 @@ const beginGraftingPackingRequireCombo = async () => {
     if (!graftPackState.rowIndex) return setError("Missing rowIndex.");
 
     if (!packForm.packingDate.trim()) return setError("Packing Date is required.");
-    if (!String(packForm.binNumber || "").trim()) return setError("Bin # is required.");
     if (!String(packForm.packingQuantity || "").trim()) return setError("Packing Quantity is required.");
 
     const processingRaw = getFieldCI(graftPackState.record, "Processing Quantity");
@@ -789,7 +725,6 @@ const beginGraftingPackingRequireCombo = async () => {
         needs: "grafting",
         rowIndex: graftPackState.rowIndex,
         packingDate: packForm.packingDate.trim(),
-        binNumber: String(packForm.binNumber || "").trim(),
         packingQuantity: String(packForm.packingQuantity).trim(),
         noteAppend: String(packForm.note || "").trim(),
       });
@@ -826,11 +761,12 @@ const beginGraftingPackingRequireCombo = async () => {
     if (!id) return setError("Packing sheet is not set. Paste link and load tabs first.");
     if (!graftingTab.trim()) return setError("Grafting tab name is required.");
 
+    // start: scan Scion, then scan Rootstock
     setGraftUnpackState({ step: "idle", code: "", rowIndex: null, record: null });
 
-    await startScanner(async (scanned) => {
-      const code = String(scanned || "").trim();
-      if (!code) return setError("Empty QR result.");
+    await startScanner(async (scannedScion) => {
+      const scionCode = String(scannedScion || "").trim();
+      if (!scionCode) return setError("Empty QR result.");
 
       try {
         updateSettings({
@@ -839,27 +775,55 @@ const beginGraftingPackingRequireCombo = async () => {
           grafting_tab_label: graftingTab.trim(),
         });
 
-        const res = await getUnpackingRecordByLabel({ needs: "grafting", labelValue: code });
-
-        if (!res?.found) {
-          alert("No Packing Record");
+        const res1 = await getUnpackingRecordByLabel({ needs: "grafting", labelValue: scionCode });
+        if (!res1?.found) {
+          alert("Scion label not found in Grafting tab. Operation cancelled.");
           setGraftUnpackState({ step: "idle", code: "", rowIndex: null, record: null });
           return;
         }
 
-        const record = res.record || {};
-        const rowIndex = res.rowIndex;
+        const record1 = res1.record || {};
+        const rowIndex1 = res1.rowIndex;
 
-        const packingQty = getFieldCI(record, "Packing Quantity");
-        if (!hasValue(packingQty)) {
-          alert("No Packing Record");
-          setGraftUnpackState({ step: "idle", code: "", rowIndex: null, record: null });
-          return;
-        }
+        await startScanner(async (scannedRoot) => {
+          const rootstockCode = String(scannedRoot || "").trim();
+          if (!rootstockCode) return setError("Empty QR result.");
 
-        setGraftUnpackState({ step: "view", code, rowIndex, record });
+          if (rootstockCode.trim().toLowerCase() === scionCode.trim().toLowerCase()) {
+            alert("Scion QR and Rootstock QR cannot be the same. Please scan the correct Rootstock label.");
+            return;
+          }
+
+          const res2 = await getUnpackingRecordByLabel({ needs: "grafting", labelValue: rootstockCode });
+          if (!res2?.found) {
+            alert("Rootstock label not found in Grafting tab. Operation cancelled.");
+            setGraftUnpackState({ step: "idle", code: "", rowIndex: null, record: null });
+            return;
+          }
+
+          const rowIndex2 = res2.rowIndex;
+          if (rowIndex2 !== rowIndex1) {
+            alert("Scion label and Rootstock label are NOT on the same row. Operation cancelled.");
+            setGraftUnpackState({ step: "idle", code: "", rowIndex: null, record: null });
+            return;
+          }
+
+          const packingQty = getFieldCI(record1, "Packing Quantity");
+          if (!hasValue(packingQty)) {
+            alert("No Packing Record");
+            setGraftUnpackState({ step: "idle", code: "", rowIndex: null, record: null });
+            return;
+          }
+
+          setGraftUnpackState({
+            step: "view",
+            code: `${scionCode} / ${rootstockCode}`,
+            rowIndex: rowIndex1,
+            record: record1,
+          });
+        });
       } catch (e) {
-        setError(e?.message || "Failed to lookup record.");
+        setError(e?.message || "Failed to lookup grafting record.");
         setGraftUnpackState({ step: "idle", code: "", rowIndex: null, record: null });
       }
     });
@@ -1103,7 +1067,7 @@ const beginGraftingPackingRequireCombo = async () => {
                 <button
                   className="primary"
                   onClick={() => {
-                    setPackForm({ packingDate: todayISO(), binNumber: "", packingQuantity: "", note: "" });
+                    setPackForm({ packingDate: todayISO(), packingQuantity: "", note: "" });
                     setOrPackState((s) => ({ ...s, step: "form" }));
                   }}
                   disabled={savingPack || savingUnpack}
@@ -1130,26 +1094,6 @@ const beginGraftingPackingRequireCombo = async () => {
                     type="date"
                     value={packForm.packingDate}
                     onChange={(e) => setPackForm((p) => ({ ...p, packingDate: e.target.value }))}
-                    disabled={savingPack}
-                  />
-                </label>
-
-                <label className="field">
-                  Bin #
-                  <input
-                    value={packForm.binNumber}
-                    onChange={(e) => setPackForm((p) => ({ ...p, binNumber: e.target.value }))}
-                    placeholder="bin number"
-                    disabled={savingPack}
-                  />
-                </label>
-
-                <label className="field">
-                  Bin #
-                  <input
-                    value={packForm.binNumber}
-                    onChange={(e) => setPackForm((p) => ({ ...p, binNumber: e.target.value }))}
-                    placeholder="bin number"
                     disabled={savingPack}
                   />
                 </label>
@@ -1334,7 +1278,7 @@ const beginGraftingPackingRequireCombo = async () => {
                 <button
                   className="primary"
                   onClick={() => {
-                    setPackForm({ packingDate: todayISO(), binNumber: "", packingQuantity: "", note: "" });
+                    setPackForm({ packingDate: todayISO(), packingQuantity: "", note: "" });
                     setGraftPackState((s) => ({ ...s, step: "form" }));
                   }}
                   disabled={savingPack || savingUnpack}
@@ -1363,6 +1307,18 @@ const beginGraftingPackingRequireCombo = async () => {
                     type="date"
                     value={packForm.packingDate}
                     onChange={(e) => setPackForm((p) => ({ ...p, packingDate: e.target.value }))}
+                    disabled={savingPack}
+                  />
+                </label>
+
+
+
+                <label className="field">
+                  Bin #
+                  <input
+                    value={packForm.binNumber}
+                    onChange={(e) => setPackForm((p) => ({ ...p, binNumber: e.target.value }))}
+                    placeholder="bin number"
                     disabled={savingPack}
                   />
                 </label>
