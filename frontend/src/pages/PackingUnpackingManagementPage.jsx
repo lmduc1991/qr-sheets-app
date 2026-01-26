@@ -154,6 +154,7 @@ export default function PackingUnpackingManagementPage() {
   // Forms (shared)
   const [packForm, setPackForm] = useState({
     packingDate: todayISO(),
+    binNumber: \"\",
     packingQuantity: "",
     note: "",
   });
@@ -341,7 +342,7 @@ export default function PackingUnpackingManagementPage() {
         return;
       }
 
-      setPackForm({ packingDate: todayISO(), packingQuantity: "", binNumber: String(getFieldCI((orPackState.record || {}), "Bin #") || "").trim(), note: "" });
+      setPackForm({ packingDate: todayISO(), binNumber: "", packingQuantity: "", note: "" });
       setOrPackState({ step: "form", code1, rowIndex, record, isAlreadyPacked: false });
     });
   };
@@ -356,9 +357,8 @@ export default function PackingUnpackingManagementPage() {
     if (!orPackState.rowIndex) return setError("Missing rowIndex.");
 
     if (!packForm.packingDate.trim()) return setError("Packing Date is required.");
-    if (!String(packForm.packingQuantity || "").trim()) return setError("Packing Quantity is required.");
-
     if (!String(packForm.binNumber || "").trim()) return setError("Bin # is required.");
+    if (!String(packForm.packingQuantity || "").trim()) return setError("Packing Quantity is required.");
 
     const processingRaw = getFieldCI(orPackState.record, "Processing Quantity");
     const pProc = parseNumberStrict(processingRaw);
@@ -389,8 +389,8 @@ export default function PackingUnpackingManagementPage() {
         needs: "or",
         rowIndex: orPackState.rowIndex,
         packingDate: packForm.packingDate.trim(),
+        binNumber: String(packForm.binNumber).trim(),
         packingQuantity: String(packForm.packingQuantity).trim(),
-        binNumber: String(packForm.binNumber || "").trim(),
         noteAppend: String(packForm.note || "").trim(),
       });
 
@@ -572,52 +572,57 @@ export default function PackingUnpackingManagementPage() {
         setGraftPackState({ step: "rootstock", scionCode, rootstockCode: "", comboCode: "", rowIndex: rowIndex1, record: record1, isAlreadyPacked: false });
 
         const scanRootstock = async () => {
-          await startScanner(async (scannedRoot) => {async (scannedRoot) => {
-          const rootstockCode = String(scannedRoot || "").trim();
-          if (!rootstockCode) return setError("Empty QR result.");
+          await startScanner(async (scannedRoot) => {
+            const rootstockCode = String(scannedRoot || "").trim();
+            if (!rootstockCode) return setError("Empty QR result.");
 
-          try {
-            const res2 = await getPackingRecordByLabel({ needs: "grafting", labelValue: rootstockCode });
-            if (!res2?.found) {
-              alert("Rootstock label not found in Grafting tab. Operation cancelled.");
-              setGraftPackState({ step: "idle", scionCode: "", rootstockCode: "", comboCode: "", rowIndex: null, record: null, isAlreadyPacked: false });
-              return;
-            }
-
-            const rowIndex2 = res2.rowIndex;
-
-            if (rowIndex2 !== rowIndex1) {
-              const again = window.confirm(
-                "Scion label and Rootstock label are NOT on the same row.\n\nOK = Re-scan Rootstock label\nCancel = Cancel operation (back to idle)"
-              );
-
-              if (again) {
-                setGraftPackState({ step: "rootstock", scionCode, rootstockCode: "", comboCode: "", rowIndex: rowIndex1, record: record1, isAlreadyPacked: false });
-                // restart only the rootstock scan
-                await scanRootstock();
+            try {
+              const res2 = await getPackingRecordByLabel({ needs: "grafting", labelValue: rootstockCode });
+              if (!res2?.found) {
+                alert("Rootstock label not found in Grafting tab. Operation cancelled.");
+                setGraftPackState({ step: "idle", scionCode: "", rootstockCode: "", comboCode: "", rowIndex: null, record: null, isAlreadyPacked: false });
                 return;
               }
 
-              setGraftPackState({ step: "idle", scionCode: "", rootstockCode: "", comboCode: "", rowIndex: null, record: null, isAlreadyPacked: false });
-              return;
-            }
+              const rowIndex2 = res2.rowIndex;
 
-            // Use record from the matched row
-            const record = record1;
+              if (rowIndex2 !== rowIndex1) {
+                const again = window.confirm(
+                  "Scion label and Rootstock label are NOT on the same row.\n\nOK = Re-scan Rootstock label\nCancel = Cancel operation (back to idle)"
+                );
 
-            const packDate = getFieldCI(record, "Packing Date");
-            const packQty = getFieldCI(record, "Packing Quantity");
-            const isAlreadyPacked = hasValue(packDate) || hasValue(packQty);
+                if (again) {
+                  setGraftPackState({ step: "rootstock", scionCode, rootstockCode: "", comboCode: "", rowIndex: rowIndex1, record: record1, isAlreadyPacked: false });
+                  // restart only the rootstock scan
+                  await scanRootstock();
+                  return;
+                }
 
-            setGraftPackState({
-              step: isAlreadyPacked ? "view" : "needAction",
-              scionCode,
-              rootstockCode,
-              comboCode: "",
-              rowIndex: rowIndex1,
-              record,
-              isAlreadyPacked,
+                setGraftPackState({ step: "idle", scionCode: "", rootstockCode: "", comboCode: "", rowIndex: null, record: null, isAlreadyPacked: false });
+                return;
+              }
+
+              // Use record from the matched row
+              const record = record1;
+
+              const packDate = getFieldCI(record, "Packing Date");
+              const packQty = getFieldCI(record, "Packing Quantity");
+              const isAlreadyPacked = hasValue(packDate) || hasValue(packQty);
+
+              setGraftPackState({
+                step: isAlreadyPacked ? "view" : "needAction",
+                scionCode,
+                rootstockCode,
+                comboCode: "",
+                rowIndex: rowIndex1,
+                record,
+                isAlreadyPacked,
               });
+            } catch (e) {
+              setError(e?.message || "Failed to lookup rootstock record.");
+              setGraftPackState({ step: "idle", scionCode: "", rootstockCode: "", comboCode: "", rowIndex: null, record: null, isAlreadyPacked: false });
+            }
+          });
         };
 
         await scanRootstock();
@@ -672,7 +677,7 @@ export default function PackingUnpackingManagementPage() {
           return;
         }
 
-        setPackForm({ packingDate: todayISO(), packingQuantity: "", binNumber: String(getFieldCI((graftPackState.record || {}), "Bin #") || "").trim(), note: "" });
+        setPackForm({ packingDate: todayISO(), binNumber: "", packingQuantity: "", note: "" });
         setGraftPackState({ step: "form", scionCode, rootstockCode, comboCode, rowIndex, record, isAlreadyPacked: false });
       } catch (e) {
         setError(e?.message || "Failed to verify combination label.");
@@ -691,9 +696,8 @@ export default function PackingUnpackingManagementPage() {
     if (!graftPackState.rowIndex) return setError("Missing rowIndex.");
 
     if (!packForm.packingDate.trim()) return setError("Packing Date is required.");
-    if (!String(packForm.packingQuantity || "").trim()) return setError("Packing Quantity is required.");
-
     if (!String(packForm.binNumber || "").trim()) return setError("Bin # is required.");
+    if (!String(packForm.packingQuantity || "").trim()) return setError("Packing Quantity is required.");
 
     const processingRaw = getFieldCI(graftPackState.record, "Processing Quantity");
     const pProc = parseNumberStrict(processingRaw);
@@ -724,8 +728,8 @@ export default function PackingUnpackingManagementPage() {
         needs: "grafting",
         rowIndex: graftPackState.rowIndex,
         packingDate: packForm.packingDate.trim(),
+        binNumber: String(packForm.binNumber).trim(),
         packingQuantity: String(packForm.packingQuantity).trim(),
-        binNumber: String(packForm.binNumber || "").trim(),
         noteAppend: String(packForm.note || "").trim(),
       });
 
@@ -1038,7 +1042,7 @@ export default function PackingUnpackingManagementPage() {
                 <button
                   className="primary"
                   onClick={() => {
-                    setPackForm({ packingDate: todayISO(), packingQuantity: "", binNumber: "", note: "" });
+                    setPackForm({ packingDate: todayISO(), binNumber: "", packingQuantity: "", note: "" });
                     setOrPackState((s) => ({ ...s, step: "form" }));
                   }}
                   disabled={savingPack || savingUnpack}
@@ -1069,7 +1073,29 @@ export default function PackingUnpackingManagementPage() {
                   />
                 </label>
 
+
                 <label className="field">
+                  Bin #
+                  <input
+                    value={packForm.binNumber}
+                    onChange={(e) => setPackForm((p) => ({ ...p, binNumber: e.target.value }))}
+                    placeholder="Required"
+                    disabled={savingPack}
+                  />
+                </label>
+
+
+                <label className="field">
+                  Bin #
+                  <input
+                    value={packForm.binNumber}
+                    onChange={(e) => setPackForm((p) => ({ ...p, binNumber: e.target.value }))}
+                    placeholder="Required"
+                    disabled={savingPack}
+                  />
+                </label>
+
+<label className="field">
                   Packing Quantity
                   <input
                     value={packForm.packingQuantity}
@@ -1079,17 +1105,7 @@ export default function PackingUnpackingManagementPage() {
                   />
                 </label>
 
-                
                 <label className="field">
-                  Bin #
-                  <input
-                    value={packForm.binNumber}
-                    onChange={(e) => setPackForm((p) => ({ ...p, binNumber: e.target.value }))}
-                    placeholder="required"
-                    disabled={savingPack}
-                  />
-                </label>
-<label className="field">
                   Note (append)
                   <textarea
                     value={packForm.note}
@@ -1259,7 +1275,7 @@ export default function PackingUnpackingManagementPage() {
                 <button
                   className="primary"
                   onClick={() => {
-                    setPackForm({ packingDate: todayISO(), packingQuantity: "", binNumber: "", note: "" });
+                    setPackForm({ packingDate: todayISO(), binNumber: "", packingQuantity: "", note: "" });
                     setGraftPackState((s) => ({ ...s, step: "form" }));
                   }}
                   disabled={savingPack || savingUnpack}
@@ -1302,17 +1318,7 @@ export default function PackingUnpackingManagementPage() {
                   />
                 </label>
 
-                
                 <label className="field">
-                  Bin #
-                  <input
-                    value={packForm.binNumber}
-                    onChange={(e) => setPackForm((p) => ({ ...p, binNumber: e.target.value }))}
-                    placeholder="required"
-                    disabled={savingPack}
-                  />
-                </label>
-<label className="field">
                   Note (append)
                   <textarea
                     value={packForm.note}
