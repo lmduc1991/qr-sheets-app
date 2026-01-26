@@ -366,11 +366,11 @@ export async function getPackingRecordByLabel({ needs = "or", labelValue }) {
   return r;
 }
 
-export async function updatePackingByRow({ needs = "or", rowIndex, packingDate, packingQuantity, binNumber, noteAppend }) {
+export async function updatePackingByRow({ needs = "or", rowIndex, packingDate, binNumber, packingQuantity, noteAppend }) {
   const s = requirePackingSettings(needs);
   const r = await callApi(
     "updatePackingByRow",
-    { spreadsheetId: s.packingSpreadsheetId, sheetName: s._packingSheetName, needs, rowIndex, packingDate, packingQuantity, binNumber, noteAppend },
+    { spreadsheetId: s.packingSpreadsheetId, sheetName: s._packingSheetName, needs, rowIndex, packingDate, binNumber, packingQuantity, noteAppend },
     { timeoutMs: 15000 }
   );
   return r;
