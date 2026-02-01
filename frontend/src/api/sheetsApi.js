@@ -144,7 +144,8 @@ export async function getItemByKey(a) {
   const key = String(keyValue || "").trim();
   if (!key) throw new Error("Missing key value");
 
-  const cacheKey = `item::${key}`;
+  // Cache must include keyColumn; user can change key column in Setup.
+  const cacheKey = `item::${s.itemsSpreadsheetId}::${s.itemsSheetName}::${s.itemsKeyColumn}::${key}`;
   const cached = getCached(mem.items, cacheKey);
   if (cached) return cached;
 
@@ -218,7 +219,8 @@ export async function getItemAndHarvestByKey(a) {
   const key = String(keyValue || "").trim();
   if (!key) throw new Error("Missing key value");
 
-  const cacheKey = `itemHarvest::${key}`;
+// Cache must include keyColumn; user can change key column in Setup.
+  const cacheKey = `item::${s.itemsSpreadsheetId}::${s.itemsSheetName}::${s.itemsKeyColumn}::${key}`;
   const cached = getCached(mem.harvest, cacheKey);
   if (cached) return cached;
 
