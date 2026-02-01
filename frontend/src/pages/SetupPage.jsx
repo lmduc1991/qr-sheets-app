@@ -18,7 +18,8 @@ export default function SetupPage() {
   const [itemsSheetName, setItemsSheetName] = useState(existing?.itemsSheetName || "MASTER LIST");
 
   const [headers, setHeaders] = useState([]);
-  const [keyColumn, setKeyColumn] = useState(existing?.keyColumn || "");
+  // Support both legacy (keyColumn) and normalized (itemsKeyColumn)
+  const [keyColumn, setKeyColumn] = useState(existing?.itemsKeyColumn || existing?.keyColumn || "");
 
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState("");
@@ -59,6 +60,7 @@ export default function SetupPage() {
     if (!itemsSheetName.trim()) return setError("Items tab name is required.");
     if (!keyColumn.trim()) return setError("Key Column is required. Click Load Columns first.");
 
+    // Save both keys so every page + the API layer stays consistent.
     saveSettings({
       proxyUrl: proxyUrl.trim(),
 
@@ -66,9 +68,9 @@ export default function SetupPage() {
       itemsSpreadsheetId,
       itemsSheetName: itemsSheetName.trim(),
       keyColumn: keyColumn.trim(),
+      itemsKeyColumn: keyColumn.trim(),
     });
 
-    // Move user into the app immediately
     nav("/items", { replace: true });
   };
 
