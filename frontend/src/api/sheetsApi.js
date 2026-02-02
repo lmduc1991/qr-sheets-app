@@ -107,10 +107,12 @@ function asObjUpdateItem(a, b) {
 }
 
 function asObjBulk(a, b) {
-  // Supports: bulkUpdate({keys, patch}) OR bulkUpdate(keys, patch)
-  if (a && typeof a === "object") return a;
+  // Supports: bulkUpdate({keys, patch}) OR bulkUpdate(keysArray, patchObject)
+  // NOTE: arrays are objects in JS, so we must not treat arrays as the object-form payload.
+  if (a && typeof a === "object" && !Array.isArray(a)) return a;
   return { keys: a, patch: b };
 }
+
 
 // ---------- Tabs ----------
 export async function getSheetTabs(spreadsheetId) {
@@ -189,6 +191,10 @@ export async function bulkUpdate(a, b) {
   const s = requireSettings();
   const { keys, patch } = asObjBulk(a, b);
 
+  if (!Array.isArray(keys) || keys.length === 0) {
+    throw new Error("bulkUpdate: keys must be a non-empty array");
+  }
+
   const r = await callApi(
     "bulkUpdate",
     {
@@ -196,12 +202,13 @@ export async function bulkUpdate(a, b) {
       sheetName: s.itemsSheetName,
       keyColumn: s.itemsKeyColumn,
       keys,
-      patch,
+      patch: patch || {},
     },
     { timeoutMs: 30000 }
   );
   return r;
 }
+
 
 // ---------- Harvest ----------
 function requireHarvestSettings() {
