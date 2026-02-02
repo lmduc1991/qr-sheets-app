@@ -6,7 +6,7 @@ import { getHeaders, bulkUpdate } from "../api/sheetsApi";
 
 export default function ItemBulkScanPage() {
   const settings = useMemo(() => loadSettings(), []);
-  const keyColumn = settings?.keyColumn || "";
+  const keyColumn = settings?.itemsKeyColumn || settings?.keyColumn || "";
 
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
