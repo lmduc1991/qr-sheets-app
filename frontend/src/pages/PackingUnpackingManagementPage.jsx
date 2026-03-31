@@ -13,7 +13,6 @@ import { loadSettings, saveSettings } from "../store/settingsStore";
 function extractSpreadsheetId(urlOrId) {
   const s = String(urlOrId || "").trim();
   if (!s) return "";
-  // if already looks like an ID
   if (/^[a-zA-Z0-9-_]{20,}$/.test(s) && !s.includes("http")) return s;
 
   const m = s.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
@@ -28,7 +27,6 @@ function normalizeHeader(s) {
   return normCompare(s).replace(/\s+/g, " ").trim();
 }
 
-// case-insensitive field getter (also normalizes whitespace)
 function getFieldCI(record, label) {
   if (!record) return "";
   const target = normalizeHeader(label);
@@ -58,12 +56,30 @@ function parseNumberStrict(v) {
   return { ok: true, value: n };
 }
 
+function uniqNums(arr) {
+  return Array.from(new Set((arr || []).map((x) => Number(x)).filter((x) => Number.isFinite(x) && x >= 2)));
+}
+
+function intersectNums(a, b) {
+  const bs = new Set(uniqNums(b));
+  return uniqNums(a).filter((x) => bs.has(x));
+}
+
+function popup(msg) {
+  try {
+    alert(String(msg || ""));
+  } catch {}
+}
+
+function isExactMultirowError(e) {
+  return String(e?.message || "").trim() === "There are multirow in the Packing/Unpacking Log";
+}
+
 // ---------------- component ----------------
 export default function PackingUnpackingManagementPage() {
   const initial = useMemo(() => loadSettings() || {}, []);
   const [settings, setSettings] = useState(initial);
 
-  // Packing sheet settings (what sheetsApi.js expects)
   const packingSpreadsheetId = useMemo(() => {
     return (
       String(settings.packingSpreadsheetId || "").trim() ||
@@ -93,13 +109,7 @@ export default function PackingUnpackingManagementPage() {
   const [scannerOn, setScannerOn] = useState(false);
   const scanHandlerRef = useRef(null);
 
-  // OR Packing state
-  // step meanings:
-  // idle: nothing active
-  // needAction: scanned #1 + record shown; show "Packing" OR show "Edit Packing Form" depending on packed state
-  // need2: waiting for 2nd scan to match
-  // form: packing form open
-  // view: record view after save or after existing packed record
+  // OR Packing
   const [orPackState, setOrPackState] = useState({
     step: "idle",
     code1: "",
@@ -108,11 +118,7 @@ export default function PackingUnpackingManagementPage() {
     isAlreadyPacked: false,
   });
 
-  // OR Unpacking state
-  // step meanings:
-  // idle: nothing active
-  // view: show record + action button (Unpacking or Edit Unpacking Form)
-  // form: unpacking form open
+  // OR Unpacking
   const [orUnpackState, setOrUnpackState] = useState({
     step: "idle",
     code: "",
@@ -120,15 +126,7 @@ export default function PackingUnpackingManagementPage() {
     record: null,
   });
 
-  // Grafting Packing state
-  // step meanings:
-  // idle: nothing active
-  // scion: waiting / scanned scion
-  // rootstock: waiting for rootstock scan
-  // needAction: record shown, not packed yet (requires combination label scan)
-  // needCombo: waiting for combination label scan
-  // form: packing form open
-  // view: record view after save or if already packed
+  // Grafting Packing
   const [graftPackState, setGraftPackState] = useState({
     step: "idle",
     scionCode: "",
@@ -137,13 +135,13 @@ export default function PackingUnpackingManagementPage() {
     rowIndex: null,
     record: null,
     isAlreadyPacked: false,
+
+    scionRows: [],
+    rootstockRows: [],
+    candidateRows: [],
   });
 
-  // Grafting Unpacking state
-  // step meanings:
-  // idle: nothing active
-  // view: show record + action button (Unpacking or Edit Unpacking Form)
-  // form: unpacking form open
+  // Grafting Unpacking
   const [graftUnpackState, setGraftUnpackState] = useState({
     step: "idle",
     code: "",
@@ -151,7 +149,7 @@ export default function PackingUnpackingManagementPage() {
     record: null,
   });
 
-  // Forms (shared)
+  // Forms
   const [packForm, setPackForm] = useState({
     packingDate: todayISO(),
     binNumber: "",
@@ -165,7 +163,6 @@ export default function PackingUnpackingManagementPage() {
     note: "",
   });
 
-  // Keep local settings in sync if other pages update them
   useEffect(() => {
     const on = () => setSettings(loadSettings() || {});
     window.addEventListener("qr_settings_changed", on);
@@ -198,13 +195,11 @@ export default function PackingUnpackingManagementPage() {
     setError("");
     setMsg("");
 
-    // Make sure only one scanner exists
     await stopScanner();
 
     scanHandlerRef.current = onScan;
     setScannerOn(true);
 
-    // Delay a tick so the div exists
     setTimeout(() => {
       try {
         const scanner = new Html5QrcodeScanner("packing_scanner", { fps: 10, qrbox: 250 }, false);
@@ -215,9 +210,7 @@ export default function PackingUnpackingManagementPage() {
             await stopScanner();
             if (handler) handler(decodedText);
           },
-          () => {
-            // scan failure: ignore spam
-          }
+          () => {}
         );
 
         scannerRef.current = scanner;
@@ -235,7 +228,6 @@ export default function PackingUnpackingManagementPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // -------- Tabs loading --------
   const loadTabs = async () => {
     setError("");
     setMsg("");
@@ -260,12 +252,23 @@ export default function PackingUnpackingManagementPage() {
     }
   };
 
-  // -------- OR Packing flow --------
+  // -------- OR Packing --------
   const beginOrPacking = async () => {
     setError("");
     setMsg("");
     setOrUnpackState({ step: "idle", code: "", rowIndex: null, record: null });
-    setGraftPackState({ step: "idle", scionCode: "", rootstockCode: "", comboCode: "", rowIndex: null, record: null, isAlreadyPacked: false });
+    setGraftPackState({
+      step: "idle",
+      scionCode: "",
+      rootstockCode: "",
+      comboCode: "",
+      rowIndex: null,
+      record: null,
+      isAlreadyPacked: false,
+      scionRows: [],
+      rootstockRows: [],
+      candidateRows: [],
+    });
     setGraftUnpackState({ step: "idle", code: "", rowIndex: null, record: null });
 
     const id = packingSpreadsheetId || extractSpreadsheetId(packingUrl);
@@ -288,7 +291,7 @@ export default function PackingUnpackingManagementPage() {
         const res = await getPackingRecordByLabel({ needs: "or", labelValue: code1 });
 
         if (!res?.found) {
-          alert("Record not found in OR tab. Operation cancelled.");
+          popup("Record not found in OR tab. Operation cancelled.");
           setOrPackState({ step: "idle", code1: "", rowIndex: null, record: null, isAlreadyPacked: false });
           return;
         }
@@ -308,7 +311,8 @@ export default function PackingUnpackingManagementPage() {
           isAlreadyPacked,
         });
       } catch (e) {
-        setError(e?.message || "Failed to lookup record.");
+        if (isExactMultirowError(e)) popup(e.message);
+        else setError(e?.message || "Failed to lookup record.");
         setOrPackState({ step: "idle", code1: "", rowIndex: null, record: null, isAlreadyPacked: false });
       }
     });
@@ -372,7 +376,7 @@ export default function PackingUnpackingManagementPage() {
     }
 
     if (pPack.value > pProc.value) {
-      alert(`Packing Quantity (${pPack.value}) cannot be greater than Processing Quantity (${pProc.value}).`);
+      popup(`Packing Quantity (${pPack.value}) cannot be greater than Processing Quantity (${pProc.value}).`);
       return;
     }
 
@@ -411,12 +415,23 @@ export default function PackingUnpackingManagementPage() {
     }
   };
 
-  // -------- OR Unpacking flow --------
+  // -------- OR Unpacking --------
   const beginOrUnpacking = async () => {
     setError("");
     setMsg("");
     setOrPackState({ step: "idle", code1: "", rowIndex: null, record: null, isAlreadyPacked: false });
-    setGraftPackState({ step: "idle", scionCode: "", rootstockCode: "", comboCode: "", rowIndex: null, record: null, isAlreadyPacked: false });
+    setGraftPackState({
+      step: "idle",
+      scionCode: "",
+      rootstockCode: "",
+      comboCode: "",
+      rowIndex: null,
+      record: null,
+      isAlreadyPacked: false,
+      scionRows: [],
+      rootstockRows: [],
+      candidateRows: [],
+    });
     setGraftUnpackState({ step: "idle", code: "", rowIndex: null, record: null });
 
     const id = packingSpreadsheetId || extractSpreadsheetId(packingUrl);
@@ -439,7 +454,7 @@ export default function PackingUnpackingManagementPage() {
         const res = await getUnpackingRecordByLabel({ needs: "or", labelValue: code });
 
         if (!res?.found) {
-          alert("Record not found in OR tab. Operation cancelled.");
+          popup("Record not found in OR tab. Operation cancelled.");
           setOrUnpackState({ step: "idle", code: "", rowIndex: null, record: null });
           return;
         }
@@ -449,14 +464,15 @@ export default function PackingUnpackingManagementPage() {
 
         const packingQty = getFieldCI(record, "Packing Quantity");
         if (!hasValue(packingQty)) {
-          alert("No Packing Record");
+          popup("No Packing Record");
           setOrUnpackState({ step: "idle", code: "", rowIndex: null, record: null });
           return;
         }
 
         setOrUnpackState({ step: "view", code, rowIndex, record });
       } catch (e) {
-        setError(e?.message || "Failed to lookup record.");
+        if (isExactMultirowError(e)) popup(e.message);
+        else setError(e?.message || "Failed to lookup record.");
         setOrUnpackState({ step: "idle", code: "", rowIndex: null, record: null });
       }
     });
@@ -497,7 +513,7 @@ export default function PackingUnpackingManagementPage() {
     }
 
     if (pUnpack.value > pPack.value) {
-      alert(`Unpacking Quantity (${pUnpack.value}) cannot be greater than Packing Quantity (${pPack.value}).`);
+      popup(`Unpacking Quantity (${pUnpack.value}) cannot be greater than Packing Quantity (${pPack.value}).`);
       return;
     }
 
@@ -534,46 +550,233 @@ export default function PackingUnpackingManagementPage() {
     }
   };
 
-  
-// -------- Grafting Packing flow --------
-const beginGraftingPacking = async () => {
-  setError("");
-  setMsg("");
+  // -------- Grafting Packing --------
+  const beginGraftingPacking = async () => {
+    setError("");
+    setMsg("");
 
-  // reset other flows
-  setOrPackState({ step: "idle", code1: "", rowIndex: null, record: null, isAlreadyPacked: false });
-  setOrUnpackState({ step: "idle", code: "", rowIndex: null, record: null });
-  setGraftUnpackState({ step: "idle", code: "", rowIndex: null, record: null });
+    setOrPackState({ step: "idle", code1: "", rowIndex: null, record: null, isAlreadyPacked: false });
+    setOrUnpackState({ step: "idle", code: "", rowIndex: null, record: null });
+    setGraftUnpackState({ step: "idle", code: "", rowIndex: null, record: null });
 
-  const id = packingSpreadsheetId || extractSpreadsheetId(packingUrl);
-  if (!id) return setError("Packing sheet is not set. Paste link and load tabs first.");
-  if (!graftingTab.trim()) return setError("Grafting tab name is required.");
+    const id = packingSpreadsheetId || extractSpreadsheetId(packingUrl);
+    if (!id) return setError("Packing sheet is not set. Paste link and load tabs first.");
+    if (!graftingTab.trim()) return setError("Grafting tab name is required.");
 
-  // initial state
-  setGraftPackState({
-    step: "scion",
-    scionCode: "",
-    rootstockCode: "",
-    comboCode: "",
-    rowIndex: null,
-    record: null,
-    isAlreadyPacked: false,
-  });
+    setGraftPackState({
+      step: "scion",
+      scionCode: "",
+      rootstockCode: "",
+      comboCode: "",
+      rowIndex: null,
+      record: null,
+      isAlreadyPacked: false,
+      scionRows: [],
+      rootstockRows: [],
+      candidateRows: [],
+    });
 
-  await startScanner(async (scannedScion) => {
-    const scionCode = String(scannedScion || "").trim();
-    if (!scionCode) return setError("Empty QR result.");
+    await startScanner(async (scannedScion) => {
+      const scionCode = String(scannedScion || "").trim();
+      if (!scionCode) return setError("Empty QR result.");
 
-    try {
-      updateSettings({
-        packingSpreadsheetId: id,
-        packingGraftingSheetName: graftingTab.trim(),
-        grafting_tab_label: graftingTab.trim(),
-      });
+      try {
+        updateSettings({
+          packingSpreadsheetId: id,
+          packingGraftingSheetName: graftingTab.trim(),
+          grafting_tab_label: graftingTab.trim(),
+        });
 
-      const res1 = await getPackingRecordByLabel({ needs: "grafting", labelValue: scionCode });
-      if (!res1?.found) {
-        alert("Scion label not found in Grafting tab. Operation cancelled.");
+        const res1 = await getPackingRecordByLabel({ needs: "grafting", labelValue: scionCode });
+        if (!res1?.found) {
+          popup("Scion label not found in Grafting tab. Operation cancelled.");
+          setGraftPackState({
+            step: "idle",
+            scionCode: "",
+            rootstockCode: "",
+            comboCode: "",
+            rowIndex: null,
+            record: null,
+            isAlreadyPacked: false,
+            scionRows: [],
+            rootstockRows: [],
+            candidateRows: [],
+          });
+          return;
+        }
+
+        const scionRows = uniqNums(res1.rowIndexes || (res1.rowIndex ? [res1.rowIndex] : []));
+        if (scionRows.length === 0) {
+          popup("Scion label not found in Grafting tab. Operation cancelled.");
+          setGraftPackState({
+            step: "idle",
+            scionCode: "",
+            rootstockCode: "",
+            comboCode: "",
+            rowIndex: null,
+            record: null,
+            isAlreadyPacked: false,
+            scionRows: [],
+            rootstockRows: [],
+            candidateRows: [],
+          });
+          return;
+        }
+
+        setGraftPackState({
+          step: "rootstock",
+          scionCode,
+          rootstockCode: "",
+          comboCode: "",
+          rowIndex: null,
+          record: null,
+          isAlreadyPacked: false,
+          scionRows,
+          rootstockRows: [],
+          candidateRows: scionRows,
+        });
+
+        const scanRootstock = async () => {
+          await startScanner(async (scannedRoot) => {
+            const rootstockCode = String(scannedRoot || "").trim();
+            if (!rootstockCode) return setError("Empty QR result.");
+
+            if (rootstockCode === scionCode) {
+              popup("Rootstock QR cannot be the same as Scion QR. Please scan a different rootstock.");
+              setGraftPackState((s) => ({ ...s, step: "rootstock" }));
+              await scanRootstock();
+              return;
+            }
+
+            try {
+              const res2 = await getPackingRecordByLabel({ needs: "grafting", labelValue: rootstockCode });
+              if (!res2?.found) {
+                popup("Rootstock label not found in Grafting tab. Operation cancelled.");
+                setGraftPackState({
+                  step: "idle",
+                  scionCode: "",
+                  rootstockCode: "",
+                  comboCode: "",
+                  rowIndex: null,
+                  record: null,
+                  isAlreadyPacked: false,
+                  scionRows: [],
+                  rootstockRows: [],
+                  candidateRows: [],
+                });
+                return;
+              }
+
+              const rootstockRows = uniqNums(res2.rowIndexes || (res2.rowIndex ? [res2.rowIndex] : []));
+              const pairRows = intersectNums(scionRows, rootstockRows);
+
+              if (pairRows.length === 0) {
+                const again = window.confirm(
+                  "Scion label and Rootstock label are NOT on the same row.\n\nOK = Re-scan Rootstock label\nCancel = Cancel operation (back to idle)"
+                );
+
+                if (again) {
+                  setGraftPackState({
+                    step: "rootstock",
+                    scionCode,
+                    rootstockCode: "",
+                    comboCode: "",
+                    rowIndex: null,
+                    record: null,
+                    isAlreadyPacked: false,
+                    scionRows,
+                    rootstockRows: [],
+                    candidateRows: scionRows,
+                  });
+                  await scanRootstock();
+                  return;
+                }
+
+                setGraftPackState({
+                  step: "idle",
+                  scionCode: "",
+                  rootstockCode: "",
+                  comboCode: "",
+                  rowIndex: null,
+                  record: null,
+                  isAlreadyPacked: false,
+                  scionRows: [],
+                  rootstockRows: [],
+                  candidateRows: [],
+                });
+                return;
+              }
+
+              if (pairRows.length > 1) {
+                popup("There are multirow in the Packing/Unpacking Log");
+                setGraftPackState({
+                  step: "idle",
+                  scionCode: "",
+                  rootstockCode: "",
+                  comboCode: "",
+                  rowIndex: null,
+                  record: null,
+                  isAlreadyPacked: false,
+                  scionRows: [],
+                  rootstockRows: [],
+                  candidateRows: [],
+                });
+                return;
+              }
+
+              const chosenRow = pairRows[0];
+              let chosenRecord = null;
+
+              if (res1?.rowIndex === chosenRow && res1?.record) chosenRecord = res1.record;
+              else if (res2?.rowIndex === chosenRow && res2?.record) chosenRecord = res2.record;
+              else {
+                // fallback reload from a stable known label
+                const reload = await getPackingRecordByLabel({ needs: "grafting", labelValue: rootstockCode });
+                chosenRecord = reload?.record || null;
+              }
+
+              const record = chosenRecord || {};
+              const packDate = getFieldCI(record, "Packing Date");
+              const packQty = getFieldCI(record, "Packing Quantity");
+              const isAlreadyPacked = hasValue(packDate) || hasValue(packQty);
+
+              setGraftPackState({
+                step: isAlreadyPacked ? "view" : "needAction",
+                scionCode,
+                rootstockCode,
+                comboCode: "",
+                rowIndex: chosenRow,
+                record,
+                isAlreadyPacked,
+                scionRows,
+                rootstockRows,
+                candidateRows: pairRows,
+              });
+            } catch (e) {
+              if (isExactMultirowError(e)) popup(e.message);
+              else setError(e?.message || "Failed to lookup rootstock record.");
+
+              setGraftPackState({
+                step: "idle",
+                scionCode: "",
+                rootstockCode: "",
+                comboCode: "",
+                rowIndex: null,
+                record: null,
+                isAlreadyPacked: false,
+                scionRows: [],
+                rootstockRows: [],
+                candidateRows: [],
+              });
+            }
+          });
+        };
+
+        await scanRootstock();
+      } catch (e) {
+        if (isExactMultirowError(e)) popup(e.message);
+        else setError(e?.message || "Failed to lookup scion record.");
+
         setGraftPackState({
           step: "idle",
           scionCode: "",
@@ -582,134 +785,22 @@ const beginGraftingPacking = async () => {
           rowIndex: null,
           record: null,
           isAlreadyPacked: false,
+          scionRows: [],
+          rootstockRows: [],
+          candidateRows: [],
         });
-        return;
       }
+    });
+  };
 
-      const record1 = res1.record || {};
-      const rowIndex1 = res1.rowIndex;
-
-      setGraftPackState({
-        step: "rootstock",
-        scionCode,
-        rootstockCode: "",
-        comboCode: "",
-        rowIndex: rowIndex1,
-        record: record1,
-        isAlreadyPacked: false,
-      });
-
-      const scanRootstock = async () => {
-        await startScanner(async (scannedRoot) => {
-          const rootstockCode = String(scannedRoot || "").trim();
-          if (!rootstockCode) return setError("Empty QR result.");
-
-          if (rootstockCode === scionCode) {
-            alert("Rootstock QR cannot be the same as Scion QR. Please scan a different rootstock.");
-            return;
-          }
-
-          try {
-            const res2 = await getPackingRecordByLabel({ needs: "grafting", labelValue: rootstockCode });
-            if (!res2?.found) {
-              alert("Rootstock label not found in Grafting tab. Operation cancelled.");
-              setGraftPackState({
-                step: "idle",
-                scionCode: "",
-                rootstockCode: "",
-                comboCode: "",
-                rowIndex: null,
-                record: null,
-                isAlreadyPacked: false,
-              });
-              return;
-            }
-
-            const rowIndex2 = res2.rowIndex;
-
-            if (rowIndex2 !== rowIndex1) {
-              const again = window.confirm(
-                "Scion label and Rootstock label are NOT on the same row.\n\nOK = Re-scan Rootstock label\nCancel = Cancel operation (back to idle)"
-              );
-
-              if (again) {
-                setGraftPackState({
-                  step: "rootstock",
-                  scionCode,
-                  rootstockCode: "",
-                  comboCode: "",
-                  rowIndex: rowIndex1,
-                  record: record1,
-                  isAlreadyPacked: false,
-                });
-                await scanRootstock();
-                return;
-              }
-
-              setGraftPackState({
-                step: "idle",
-                scionCode: "",
-                rootstockCode: "",
-                comboCode: "",
-                rowIndex: null,
-                record: null,
-                isAlreadyPacked: false,
-              });
-              return;
-            }
-
-            const record = record1;
-
-            const packDate = getFieldCI(record, "Packing Date");
-            const packQty = getFieldCI(record, "Packing Quantity");
-            const isAlreadyPacked = hasValue(packDate) || hasValue(packQty);
-
-            setGraftPackState({
-              step: isAlreadyPacked ? "view" : "needAction",
-              scionCode,
-              rootstockCode,
-              comboCode: "",
-              rowIndex: rowIndex1,
-              record,
-              isAlreadyPacked,
-            });
-          } catch (e) {
-            setError(e?.message || "Failed to lookup rootstock record.");
-            setGraftPackState({
-              step: "idle",
-              scionCode: "",
-              rootstockCode: "",
-              comboCode: "",
-              rowIndex: null,
-              record: null,
-              isAlreadyPacked: false,
-            });
-          }
-        });
-      };
-
-      await scanRootstock();
-    } catch (e) {
-      setError(e?.message || "Failed to lookup scion record.");
-      setGraftPackState({
-        step: "idle",
-        scionCode: "",
-        rootstockCode: "",
-        comboCode: "",
-        rowIndex: null,
-        record: null,
-        isAlreadyPacked: false,
-      });
-    }
-  });
-};
-
-const beginGraftingPackingRequireCombo = async () => {
+  const beginGraftingPackingRequireCombo = async () => {
     setError("");
     setMsg("");
 
     const { scionCode, rootstockCode, rowIndex, record } = graftPackState;
-    if (!scionCode || !rootstockCode || !rowIndex || !record) return setError("Missing scion/rootstock context. Start Grafting-Packing again.");
+    if (!scionCode || !rootstockCode || !rowIndex || !record) {
+      return setError("Missing scion/rootstock context. Start Grafting-Packing again.");
+    }
 
     setGraftPackState((s) => ({ ...s, step: "needCombo" }));
 
@@ -727,11 +818,23 @@ const beginGraftingPackingRequireCombo = async () => {
             beginGraftingPackingRequireCombo();
             return;
           }
-          setGraftPackState({ step: "idle", scionCode: "", rootstockCode: "", comboCode: "", rowIndex: null, record: null, isAlreadyPacked: false });
+          setGraftPackState({
+            step: "idle",
+            scionCode: "",
+            rootstockCode: "",
+            comboCode: "",
+            rowIndex: null,
+            record: null,
+            isAlreadyPacked: false,
+            scionRows: [],
+            rootstockRows: [],
+            candidateRows: [],
+          });
           return;
         }
 
-        if (res3.rowIndex !== rowIndex) {
+        const comboRows = uniqNums(res3.rowIndexes || (res3.rowIndex ? [res3.rowIndex] : []));
+        if (!comboRows.includes(rowIndex)) {
           const again = window.confirm(
             "Combination label does NOT match the scion/rootstock row.\n\nOK = Re-scan combination label\nCancel = Cancel operation (back to idle)"
           );
@@ -739,15 +842,39 @@ const beginGraftingPackingRequireCombo = async () => {
             beginGraftingPackingRequireCombo();
             return;
           }
-          setGraftPackState({ step: "idle", scionCode: "", rootstockCode: "", comboCode: "", rowIndex: null, record: null, isAlreadyPacked: false });
+          setGraftPackState({
+            step: "idle",
+            scionCode: "",
+            rootstockCode: "",
+            comboCode: "",
+            rowIndex: null,
+            record: null,
+            isAlreadyPacked: false,
+            scionRows: [],
+            rootstockRows: [],
+            candidateRows: [],
+          });
           return;
         }
 
         setPackForm({ packingDate: todayISO(), binNumber: "", packingQuantity: "", note: "" });
-        setGraftPackState({ step: "form", scionCode, rootstockCode, comboCode, rowIndex, record, isAlreadyPacked: false });
+        setGraftPackState((s) => ({ ...s, step: "form", comboCode }));
       } catch (e) {
-        setError(e?.message || "Failed to verify combination label.");
-        setGraftPackState({ step: "idle", scionCode: "", rootstockCode: "", comboCode: "", rowIndex: null, record: null, isAlreadyPacked: false });
+        if (isExactMultirowError(e)) popup(e.message);
+        else setError(e?.message || "Failed to verify combination label.");
+
+        setGraftPackState({
+          step: "idle",
+          scionCode: "",
+          rootstockCode: "",
+          comboCode: "",
+          rowIndex: null,
+          record: null,
+          isAlreadyPacked: false,
+          scionRows: [],
+          rootstockRows: [],
+          candidateRows: [],
+        });
       }
     });
   };
@@ -777,7 +904,7 @@ const beginGraftingPackingRequireCombo = async () => {
     }
 
     if (pPack.value > pProc.value) {
-      alert(`Packing Quantity (${pPack.value}) cannot be greater than Processing Quantity (${pProc.value}).`);
+      popup(`Packing Quantity (${pPack.value}) cannot be greater than Processing Quantity (${pProc.value}).`);
       return;
     }
 
@@ -801,15 +928,16 @@ const beginGraftingPackingRequireCombo = async () => {
 
       setMsg("Saved grafting packing.");
 
-      // Reload using best known label (combo preferred)
       const lookupLabel = graftPackState.comboCode || graftPackState.scionCode || graftPackState.rootstockCode;
       const res = await getPackingRecordByLabel({ needs: "grafting", labelValue: lookupLabel });
+
+      const record =
+        res?.rowIndex === graftPackState.rowIndex && res?.record ? res.record : graftPackState.record;
 
       setGraftPackState((s) => ({
         ...s,
         step: "view",
-        rowIndex: res?.rowIndex || s.rowIndex,
-        record: res?.record || s.record,
+        record,
         isAlreadyPacked: true,
       }));
     } catch (e) {
@@ -819,13 +947,24 @@ const beginGraftingPackingRequireCombo = async () => {
     }
   };
 
-  // -------- Grafting Unpacking flow --------
+  // -------- Grafting Unpacking --------
   const beginGraftingUnpacking = async () => {
     setError("");
     setMsg("");
     setOrPackState({ step: "idle", code1: "", rowIndex: null, record: null, isAlreadyPacked: false });
     setOrUnpackState({ step: "idle", code: "", rowIndex: null, record: null });
-    setGraftPackState({ step: "idle", scionCode: "", rootstockCode: "", comboCode: "", rowIndex: null, record: null, isAlreadyPacked: false });
+    setGraftPackState({
+      step: "idle",
+      scionCode: "",
+      rootstockCode: "",
+      comboCode: "",
+      rowIndex: null,
+      record: null,
+      isAlreadyPacked: false,
+      scionRows: [],
+      rootstockRows: [],
+      candidateRows: [],
+    });
 
     const id = packingSpreadsheetId || extractSpreadsheetId(packingUrl);
     if (!id) return setError("Packing sheet is not set. Paste link and load tabs first.");
@@ -847,7 +986,14 @@ const beginGraftingPackingRequireCombo = async () => {
         const res = await getUnpackingRecordByLabel({ needs: "grafting", labelValue: code });
 
         if (!res?.found) {
-          alert("No Packing Record");
+          popup("No Packing Record");
+          setGraftUnpackState({ step: "idle", code: "", rowIndex: null, record: null });
+          return;
+        }
+
+        const rowIndexes = uniqNums(res.rowIndexes || (res.rowIndex ? [res.rowIndex] : []));
+        if (rowIndexes.length > 1) {
+          popup("There are multirow in the Packing/Unpacking Log");
           setGraftUnpackState({ step: "idle", code: "", rowIndex: null, record: null });
           return;
         }
@@ -857,14 +1003,15 @@ const beginGraftingPackingRequireCombo = async () => {
 
         const packingQty = getFieldCI(record, "Packing Quantity");
         if (!hasValue(packingQty)) {
-          alert("No Packing Record");
+          popup("No Packing Record");
           setGraftUnpackState({ step: "idle", code: "", rowIndex: null, record: null });
           return;
         }
 
         setGraftUnpackState({ step: "view", code, rowIndex, record });
       } catch (e) {
-        setError(e?.message || "Failed to lookup record.");
+        if (isExactMultirowError(e)) popup(e.message);
+        else setError(e?.message || "Failed to lookup record.");
         setGraftUnpackState({ step: "idle", code: "", rowIndex: null, record: null });
       }
     });
@@ -905,7 +1052,7 @@ const beginGraftingPackingRequireCombo = async () => {
     }
 
     if (pUnpack.value > pPack.value) {
-      alert(`Unpacking Quantity (${pUnpack.value}) cannot be greater than Packing Quantity (${pPack.value}).`);
+      popup(`Unpacking Quantity (${pUnpack.value}) cannot be greater than Packing Quantity (${pPack.value}).`);
       return;
     }
 
@@ -968,7 +1115,6 @@ const beginGraftingPackingRequireCombo = async () => {
       {error && <div className="alert alert-error">{error}</div>}
       {msg && <div className="alert alert-ok">{msg}</div>}
 
-      {/* Setup */}
       <div className="card">
         <h3>Setup (Packing / Unpacking Sheet)</h3>
 
@@ -998,18 +1144,17 @@ const beginGraftingPackingRequireCombo = async () => {
               }
               disabled={loadingTabs || !tabs.length}
             >
-              {!tabs.length && <option value={orTab}>{orTab}</option>}
-              {tabs.length > 0 &&
-                tabs.map((t) => (
-                  <option key={t} value={t}>
-                    {t}
-                  </option>
-                ))}
+              {!tabs.length && <option value="">-- Select OR tab --</option>}
+              {tabs.map((t) => (
+                <option key={`or-${t}`} value={t}>
+                  {t}
+                </option>
+              ))}
             </select>
           </label>
 
           <label className="field">
-            Grafting tab name
+            GRAFTING tab name
             <select
               value={graftingTab}
               onChange={(e) =>
@@ -1020,474 +1165,451 @@ const beginGraftingPackingRequireCombo = async () => {
               }
               disabled={loadingTabs || !tabs.length}
             >
-              {!tabs.length && <option value={graftingTab}>{graftingTab}</option>}
-              {tabs.length > 0 &&
-                tabs.map((t) => (
-                  <option key={t} value={t}>
-                    {t}
-                  </option>
-                ))}
+              {!tabs.length && <option value="">-- Select GRAFTING tab --</option>}
+              {tabs.map((t) => (
+                <option key={`graft-${t}`} value={t}>
+                  {t}
+                </option>
+              ))}
             </select>
           </label>
         </div>
 
-        <div style={{ fontSize: 12, opacity: 0.8, marginTop: 8 }}>
-          This page uses your Apps Script actions: <strong>getPackingRecordByLabel</strong>,{" "}
-          <strong>updatePackingByRow</strong>, <strong>getUnpackingRecordByLabel</strong>,{" "}
-          <strong>updateUnpackingByRow</strong>.
+        <div style={{ marginTop: 10, fontSize: 13, opacity: 0.8 }}>
+          Load tabs, then choose OR and GRAFTING tabs. Settings save immediately when you change the dropdowns.
         </div>
       </div>
 
-      {/* Scanner container */}
-      {scannerOn && (
-        <div className="card" style={{ marginTop: 12 }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
-            <div style={{ fontWeight: 700 }}>Scanner</div>
-            <button onClick={stopScanner} disabled={savingPack || savingUnpack}>
-              Cancel Scan
-            </button>
-          </div>
-          <div id="packing_scanner" style={{ marginTop: 10 }} />
-        </div>
-      )}
+      <div className="card">
+        <h3>Choose operation</h3>
 
-      {/* Actions */}
-      <div className="card" style={{ marginTop: 12 }}>
-        <h3>Operations</h3>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-          <button onClick={beginOrPacking} disabled={savingPack || savingUnpack}>
+          <button className="primary" onClick={beginOrPacking} disabled={savingPack || savingUnpack}>
             OR-Packing
           </button>
-          <button onClick={beginOrUnpacking} disabled={savingPack || savingUnpack}>
+          <button className="primary" onClick={beginOrUnpacking} disabled={savingPack || savingUnpack}>
             OR-Unpacking
           </button>
-
-          <button onClick={beginGraftingPacking} disabled={savingPack || savingUnpack}>
+          <button className="primary" onClick={beginGraftingPacking} disabled={savingPack || savingUnpack}>
             Grafting-Packing
           </button>
-          <button onClick={beginGraftingUnpacking} disabled={savingPack || savingUnpack}>
+          <button className="primary" onClick={beginGraftingUnpacking} disabled={savingPack || savingUnpack}>
             Grafting-Unpacking
           </button>
         </div>
+
+        <div style={{ marginTop: 12 }}>
+          <div id="packing_scanner" style={{ display: scannerOn ? "block" : "none" }} />
+        </div>
       </div>
 
-      {/* OR-Packing UI */}
-      {orPackState.step !== "idle" && (
-        <div style={{ marginTop: 12 }}>
-          <div className="card">
-            <h3>OR-Packing</h3>
+      {/* OR Packing */}
+      {(orPackState.step !== "idle" || orPackState.record) && (
+        <div className="card">
+          <h3>OR-Packing</h3>
 
-            <div style={{ fontSize: 13, opacity: 0.85 }}>
-              First QR: <strong>{orPackState.code1 || "-"}</strong>
+          {orPackState.step === "needAction" && (
+            <div style={{ marginTop: 10, display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <button className="primary" onClick={beginOrPackingRequireSecondScan} disabled={savingPack || savingUnpack}>
+                Packing
+              </button>
+              <button
+                onClick={() => setOrPackState({ step: "idle", code1: "", rowIndex: null, record: null, isAlreadyPacked: false })}
+                disabled={savingPack || savingUnpack}
+              >
+                Cancel
+              </button>
             </div>
+          )}
 
-            {orPackState.step === "needAction" && (
-              <div style={{ marginTop: 10, display: "flex", gap: 10, flexWrap: "wrap" }}>
-                <button className="primary" onClick={beginOrPackingRequireSecondScan} disabled={savingPack || savingUnpack}>
-                  Packing
+          {orPackState.step === "need2" && (
+            <div style={{ marginTop: 10 }}>
+              <div className="alert">
+                Scan the <strong>second label QR</strong> (must match the first QR).
+              </div>
+            </div>
+          )}
+
+          {orPackState.step === "view" && (
+            <div style={{ marginTop: 10, display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <button
+                className="primary"
+                onClick={() => {
+                  setPackForm({ packingDate: todayISO(), binNumber: "", packingQuantity: "", note: "" });
+                  setOrPackState((s) => ({ ...s, step: "form" }));
+                }}
+                disabled={savingPack || savingUnpack}
+              >
+                Edit Packing Form
+              </button>
+
+              <button
+                onClick={() => setOrPackState({ step: "idle", code1: "", rowIndex: null, record: null, isAlreadyPacked: false })}
+                disabled={savingPack || savingUnpack}
+              >
+                Done
+              </button>
+            </div>
+          )}
+
+          {orPackState.step === "form" && (
+            <div className="card" style={{ marginTop: 12 }}>
+              <h4>Packing Form</h4>
+
+              <label className="field">
+                Packing Date
+                <input
+                  type="date"
+                  value={packForm.packingDate}
+                  onChange={(e) => setPackForm((p) => ({ ...p, packingDate: e.target.value }))}
+                  disabled={savingPack}
+                />
+              </label>
+
+              <label className="field">
+                Bin #
+                <input
+                  value={packForm.binNumber}
+                  onChange={(e) => setPackForm((p) => ({ ...p, binNumber: e.target.value }))}
+                  placeholder="bin number"
+                  disabled={savingPack}
+                />
+              </label>
+
+              <label className="field">
+                Packing Quantity
+                <input
+                  value={packForm.packingQuantity}
+                  onChange={(e) => setPackForm((p) => ({ ...p, packingQuantity: e.target.value }))}
+                  placeholder="number"
+                  disabled={savingPack}
+                />
+              </label>
+
+              <label className="field">
+                Note (append)
+                <textarea
+                  value={packForm.note}
+                  onChange={(e) => setPackForm((p) => ({ ...p, note: e.target.value }))}
+                  rows={3}
+                  disabled={savingPack}
+                />
+              </label>
+
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                <button className="primary" onClick={saveOrPacking} disabled={savingPack}>
+                  {savingPack ? "Saving..." : "Save Packing"}
                 </button>
-                <button
-                  onClick={() => setOrPackState({ step: "idle", code1: "", rowIndex: null, record: null, isAlreadyPacked: false })}
-                  disabled={savingPack || savingUnpack}
-                >
+                <button onClick={() => setOrPackState((s) => ({ ...s, step: "view" }))} disabled={savingPack}>
                   Cancel
                 </button>
               </div>
-            )}
 
-            {orPackState.step === "need2" && (
-              <div style={{ marginTop: 10 }}>
-                <div className="alert">
-                  Scan the <strong>second label QR</strong> (must match the first QR).
-                </div>
+              <div style={{ marginTop: 10, fontSize: 12, opacity: 0.8 }}>
+                Validation: Packing Quantity cannot exceed Processing Quantity.
               </div>
-            )}
-
-            {orPackState.step === "view" && (
-              <div style={{ marginTop: 10, display: "flex", gap: 10, flexWrap: "wrap" }}>
-                <button
-                  className="primary"
-                  onClick={() => {
-                    setPackForm({ packingDate: todayISO(), binNumber: "", packingQuantity: "", note: "" });
-                    setOrPackState((s) => ({ ...s, step: "form" }));
-                  }}
-                  disabled={savingPack || savingUnpack}
-                >
-                  Edit Packing Form
-                </button>
-
-                <button
-                  onClick={() => setOrPackState({ step: "idle", code1: "", rowIndex: null, record: null, isAlreadyPacked: false })}
-                  disabled={savingPack || savingUnpack}
-                >
-                  Done
-                </button>
-              </div>
-            )}
-
-            {orPackState.step === "form" && (
-              <div className="card" style={{ marginTop: 12 }}>
-                <h4>Packing Form</h4>
-
-                <label className="field">
-                  Packing Date
-                  <input
-                    type="date"
-                    value={packForm.packingDate}
-                    onChange={(e) => setPackForm((p) => ({ ...p, packingDate: e.target.value }))}
-                    disabled={savingPack}
-                  />
-                </label>
-
-                <label className="field">
-                  Bin #
-                  <input
-                    value={packForm.binNumber}
-                    onChange={(e) => setPackForm((p) => ({ ...p, binNumber: e.target.value }))}
-                    placeholder="bin number"
-                    disabled={savingPack}
-                  />
-                </label>
-
-                <label className="field">
-                  Packing Quantity
-                  <input
-                    value={packForm.packingQuantity}
-                    onChange={(e) => setPackForm((p) => ({ ...p, packingQuantity: e.target.value }))}
-                    placeholder="number"
-                    disabled={savingPack}
-                  />
-                </label>
-
-                <label className="field">
-                  Note (append)
-                  <textarea
-                    value={packForm.note}
-                    onChange={(e) => setPackForm((p) => ({ ...p, note: e.target.value }))}
-                    rows={3}
-                    disabled={savingPack}
-                  />
-                </label>
-
-                <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                  <button className="primary" onClick={saveOrPacking} disabled={savingPack}>
-                    {savingPack ? "Saving..." : "Save Packing"}
-                  </button>
-                  <button onClick={() => setOrPackState((s) => ({ ...s, step: "view" }))} disabled={savingPack}>
-                    Cancel
-                  </button>
-                </div>
-
-                <div style={{ marginTop: 10, fontSize: 12, opacity: 0.8 }}>
-                  Validation: Packing Quantity cannot exceed Processing Quantity.
-                </div>
-              </div>
-            )}
-          </div>
+            </div>
+          )}
 
           {renderRecord(orPackState.record)}
         </div>
       )}
 
-      {/* OR-Unpacking UI */}
-      {orUnpackState.step !== "idle" && (
-        <div style={{ marginTop: 12 }}>
-          <div className="card">
-            <h3>OR-Unpacking</h3>
-            <div style={{ fontSize: 13, opacity: 0.85 }}>
-              QR: <strong>{orUnpackState.code || "-"}</strong>
+      {/* OR Unpacking */}
+      {(orUnpackState.step !== "idle" || orUnpackState.record) && (
+        <div className="card">
+          <h3>OR-Unpacking</h3>
+
+          {orUnpackState.step === "view" && (
+            <div style={{ marginTop: 10, display: "flex", gap: 10, flexWrap: "wrap" }}>
+              {orUnpackHasData ? (
+                <button className="primary" onClick={goToOrUnpackForm} disabled={savingUnpack}>
+                  Edit Unpacking Form
+                </button>
+              ) : (
+                <button className="primary" onClick={goToOrUnpackForm} disabled={savingUnpack}>
+                  Unpacking
+                </button>
+              )}
+
+              <button onClick={() => setOrUnpackState({ step: "idle", code: "", rowIndex: null, record: null })} disabled={savingUnpack}>
+                Done
+              </button>
             </div>
+          )}
 
-            {orUnpackState.step === "view" && (
-              <div style={{ marginTop: 10, display: "flex", gap: 10, flexWrap: "wrap" }}>
-                {orUnpackHasData ? (
-                  <button className="primary" onClick={goToOrUnpackForm} disabled={savingUnpack}>
-                    Edit Unpacking Form
-                  </button>
-                ) : (
-                  <button className="primary" onClick={goToOrUnpackForm} disabled={savingUnpack}>
-                    Unpacking
-                  </button>
-                )}
+          {orUnpackState.step === "form" && (
+            <div className="card" style={{ marginTop: 12 }}>
+              <h4>Unpacking Form</h4>
 
-                <button onClick={() => setOrUnpackState({ step: "idle", code: "", rowIndex: null, record: null })} disabled={savingUnpack}>
-                  Done
+              <label className="field">
+                Unpacking Date
+                <input
+                  type="date"
+                  value={unpackForm.unpackingDate}
+                  onChange={(e) => setUnpackForm((p) => ({ ...p, unpackingDate: e.target.value }))}
+                  disabled={savingUnpack}
+                />
+              </label>
+
+              <label className="field">
+                Unpacking Quantity
+                <input
+                  value={unpackForm.unpackingQuantity}
+                  onChange={(e) => setUnpackForm((p) => ({ ...p, unpackingQuantity: e.target.value }))}
+                  placeholder="number"
+                  disabled={savingUnpack}
+                />
+              </label>
+
+              <label className="field">
+                Note (append)
+                <textarea
+                  value={unpackForm.note}
+                  onChange={(e) => setUnpackForm((p) => ({ ...p, note: e.target.value }))}
+                  rows={3}
+                  disabled={savingUnpack}
+                />
+              </label>
+
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                <button className="primary" onClick={saveOrUnpacking} disabled={savingUnpack}>
+                  {savingUnpack ? "Saving..." : "Save Unpacking"}
+                </button>
+                <button onClick={() => setOrUnpackState((s) => ({ ...s, step: "view" }))} disabled={savingUnpack}>
+                  Cancel
                 </button>
               </div>
-            )}
 
-            {orUnpackState.step === "form" && (
-              <div className="card" style={{ marginTop: 12 }}>
-                <h4>Unpacking Form</h4>
-
-                <label className="field">
-                  Unpacking Date
-                  <input
-                    type="date"
-                    value={unpackForm.unpackingDate}
-                    onChange={(e) => setUnpackForm((p) => ({ ...p, unpackingDate: e.target.value }))}
-                    disabled={savingUnpack}
-                  />
-                </label>
-
-                <label className="field">
-                  Unpacking Quantity
-                  <input
-                    value={unpackForm.unpackingQuantity}
-                    onChange={(e) => setUnpackForm((p) => ({ ...p, unpackingQuantity: e.target.value }))}
-                    placeholder="number"
-                    disabled={savingUnpack}
-                  />
-                </label>
-
-                <label className="field">
-                  Note (append)
-                  <textarea
-                    value={unpackForm.note}
-                    onChange={(e) => setUnpackForm((p) => ({ ...p, note: e.target.value }))}
-                    rows={3}
-                    disabled={savingUnpack}
-                  />
-                </label>
-
-                <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                  <button className="primary" onClick={saveOrUnpacking} disabled={savingUnpack}>
-                    {savingUnpack ? "Saving..." : "Save Unpacking"}
-                  </button>
-                  <button onClick={() => setOrUnpackState((s) => ({ ...s, step: "view" }))} disabled={savingUnpack}>
-                    Cancel
-                  </button>
-                </div>
-
-                <div style={{ marginTop: 10, fontSize: 12, opacity: 0.8 }}>
-                  Validation: Unpacking Quantity cannot exceed Packing Quantity.
-                </div>
+              <div style={{ marginTop: 10, fontSize: 12, opacity: 0.8 }}>
+                Validation: Unpacking Quantity cannot exceed Packing Quantity.
               </div>
-            )}
-          </div>
+            </div>
+          )}
 
           {renderRecord(orUnpackState.record)}
         </div>
       )}
 
-      {/* Grafting-Packing UI */}
-      {graftPackState.step !== "idle" && (
-        <div style={{ marginTop: 12 }}>
-          <div className="card">
-            <h3>Grafting-Packing</h3>
+      {/* Grafting Packing */}
+      {(graftPackState.step !== "idle" || graftPackState.record) && (
+        <div className="card">
+          <h3>Grafting-Packing</h3>
 
-            <div style={{ fontSize: 13, opacity: 0.85, display: "grid", gap: 4 }}>
-              <div>
-                Scion QR: <strong>{graftPackState.scionCode || "-"}</strong>
-              </div>
-              <div>
-                Rootstock QR: <strong>{graftPackState.rootstockCode || "-"}</strong>
-              </div>
-              {graftPackState.comboCode ? (
-                <div>
-                  Combination QR: <strong>{graftPackState.comboCode}</strong>
-                </div>
-              ) : null}
+          {graftPackState.step === "scion" && (
+            <div className="alert">
+              Scan the <strong>Scion QR</strong>.
             </div>
+          )}
 
-            {graftPackState.step === "scion" && (
-              <div style={{ marginTop: 10 }} className="alert">
-                Scan the <strong>Scion label QR</strong>.
-              </div>
-            )}
+          {graftPackState.step === "rootstock" && (
+            <div className="alert">
+              Scan the <strong>Rootstock QR</strong> (must belong to the same row as the scanned scion).
+            </div>
+          )}
 
-            {graftPackState.step === "rootstock" && (
-              <div style={{ marginTop: 10 }} className="alert">
-                Scan the <strong>Rootstock label QR</strong> (must be on the same row as the scion).
-              </div>
-            )}
+          {graftPackState.step === "needAction" && (
+            <div style={{ marginTop: 10, display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <button className="primary" onClick={beginGraftingPackingRequireCombo} disabled={savingPack || savingUnpack}>
+                Packing
+              </button>
+              <button
+                onClick={() =>
+                  setGraftPackState({
+                    step: "idle",
+                    scionCode: "",
+                    rootstockCode: "",
+                    comboCode: "",
+                    rowIndex: null,
+                    record: null,
+                    isAlreadyPacked: false,
+                    scionRows: [],
+                    rootstockRows: [],
+                    candidateRows: [],
+                  })
+                }
+                disabled={savingPack || savingUnpack}
+              >
+                Cancel
+              </button>
+            </div>
+          )}
 
-            {graftPackState.step === "needAction" && (
-              <div style={{ marginTop: 10, display: "flex", gap: 10, flexWrap: "wrap" }}>
-                <button className="primary" onClick={beginGraftingPackingRequireCombo} disabled={savingPack || savingUnpack}>
-                  Packing
+          {graftPackState.step === "needCombo" && (
+            <div style={{ marginTop: 10 }} className="alert">
+              Scan the <strong>Combination label QR</strong> (must match scion/rootstock row).
+            </div>
+          )}
+
+          {graftPackState.step === "view" && (
+            <div style={{ marginTop: 10, display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <button
+                className="primary"
+                onClick={() => {
+                  setPackForm({ packingDate: todayISO(), binNumber: "", packingQuantity: "", note: "" });
+                  setGraftPackState((s) => ({ ...s, step: "form" }));
+                }}
+                disabled={savingPack || savingUnpack}
+              >
+                Edit Packing Form
+              </button>
+
+              <button
+                onClick={() =>
+                  setGraftPackState({
+                    step: "idle",
+                    scionCode: "",
+                    rootstockCode: "",
+                    comboCode: "",
+                    rowIndex: null,
+                    record: null,
+                    isAlreadyPacked: false,
+                    scionRows: [],
+                    rootstockRows: [],
+                    candidateRows: [],
+                  })
+                }
+                disabled={savingPack || savingUnpack}
+              >
+                Done
+              </button>
+            </div>
+          )}
+
+          {graftPackState.step === "form" && (
+            <div className="card" style={{ marginTop: 12 }}>
+              <h4>Packing Form</h4>
+
+              <label className="field">
+                Packing Date
+                <input
+                  type="date"
+                  value={packForm.packingDate}
+                  onChange={(e) => setPackForm((p) => ({ ...p, packingDate: e.target.value }))}
+                  disabled={savingPack}
+                />
+              </label>
+
+              <label className="field">
+                <div className="label">Bin #</div>
+                <input
+                  className="input"
+                  value={packForm.binNumber}
+                  onChange={(e) => setPackForm((p) => ({ ...p, binNumber: e.target.value }))}
+                  placeholder="Bin # (required)"
+                />
+              </label>
+
+              <label className="field">
+                Packing Quantity
+                <input
+                  value={packForm.packingQuantity}
+                  onChange={(e) => setPackForm((p) => ({ ...p, packingQuantity: e.target.value }))}
+                  placeholder="number"
+                  disabled={savingPack}
+                />
+              </label>
+
+              <label className="field">
+                Note (append)
+                <textarea
+                  value={packForm.note}
+                  onChange={(e) => setPackForm((p) => ({ ...p, note: e.target.value }))}
+                  rows={3}
+                  disabled={savingPack}
+                />
+              </label>
+
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                <button className="primary" onClick={saveGraftingPacking} disabled={savingPack}>
+                  {savingPack ? "Saving..." : "Save Packing"}
                 </button>
-                <button
-                  onClick={() =>
-                    setGraftPackState({ step: "idle", scionCode: "", rootstockCode: "", comboCode: "", rowIndex: null, record: null, isAlreadyPacked: false })
-                  }
-                  disabled={savingPack || savingUnpack}
-                >
+                <button onClick={() => setGraftPackState((s) => ({ ...s, step: "view" }))} disabled={savingPack}>
                   Cancel
                 </button>
               </div>
-            )}
 
-            {graftPackState.step === "needCombo" && (
-              <div style={{ marginTop: 10 }} className="alert">
-                Scan the <strong>Combination label QR</strong> (must match scion/rootstock row).
+              <div style={{ marginTop: 10, fontSize: 12, opacity: 0.8 }}>
+                Validation: Packing Quantity cannot exceed Processing Quantity.
               </div>
-            )}
-
-            {graftPackState.step === "view" && (
-              <div style={{ marginTop: 10, display: "flex", gap: 10, flexWrap: "wrap" }}>
-                <button
-                  className="primary"
-                  onClick={() => {
-                    setPackForm({ packingDate: todayISO(), binNumber: "", packingQuantity: "", note: "" });
-                    setGraftPackState((s) => ({ ...s, step: "form" }));
-                  }}
-                  disabled={savingPack || savingUnpack}
-                >
-                  Edit Packing Form
-                </button>
-
-                <button
-                  onClick={() =>
-                    setGraftPackState({ step: "idle", scionCode: "", rootstockCode: "", comboCode: "", rowIndex: null, record: null, isAlreadyPacked: false })
-                  }
-                  disabled={savingPack || savingUnpack}
-                >
-                  Done
-                </button>
-              </div>
-            )}
-
-            {graftPackState.step === "form" && (
-              <div className="card" style={{ marginTop: 12 }}>
-                <h4>Packing Form</h4>
-
-                <label className="field">
-                  Packing Date
-                  <input
-                    type="date"
-                    value={packForm.packingDate}
-                    onChange={(e) => setPackForm((p) => ({ ...p, packingDate: e.target.value }))}
-                    disabled={savingPack}
-                  />
-                </label>
-                <label className="field">
-                  <div className="label">Bin #</div>
-                  <input
-                    className="input"
-                    value={packForm.binNumber}
-                    onChange={(e) => setPackForm((p) => ({ ...p, binNumber: e.target.value }))}
-                    placeholder="Bin # (required)"
-                  />
-                </label>
-
-
-                <label className="field">
-                  Packing Quantity
-                  <input
-                    value={packForm.packingQuantity}
-                    onChange={(e) => setPackForm((p) => ({ ...p, packingQuantity: e.target.value }))}
-                    placeholder="number"
-                    disabled={savingPack}
-                  />
-                </label>
-
-                <label className="field">
-                  Note (append)
-                  <textarea
-                    value={packForm.note}
-                    onChange={(e) => setPackForm((p) => ({ ...p, note: e.target.value }))}
-                    rows={3}
-                    disabled={savingPack}
-                  />
-                </label>
-
-                <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                  <button className="primary" onClick={saveGraftingPacking} disabled={savingPack}>
-                    {savingPack ? "Saving..." : "Save Packing"}
-                  </button>
-                  <button onClick={() => setGraftPackState((s) => ({ ...s, step: "view" }))} disabled={savingPack}>
-                    Cancel
-                  </button>
-                </div>
-
-                <div style={{ marginTop: 10, fontSize: 12, opacity: 0.8 }}>
-                  Validation: Packing Quantity cannot exceed Processing Quantity.
-                </div>
-              </div>
-            )}
-          </div>
+            </div>
+          )}
 
           {renderRecord(graftPackState.record)}
         </div>
       )}
 
-      {/* Grafting-Unpacking UI */}
-      {graftUnpackState.step !== "idle" && (
-        <div style={{ marginTop: 12 }}>
-          <div className="card">
-            <h3>Grafting-Unpacking</h3>
-            <div style={{ fontSize: 13, opacity: 0.85 }}>
-              Combination QR: <strong>{graftUnpackState.code || "-"}</strong>
+      {/* Grafting Unpacking */}
+      {(graftUnpackState.step !== "idle" || graftUnpackState.record) && (
+        <div className="card">
+          <h3>Grafting-Unpacking</h3>
+
+          {graftUnpackState.step === "view" && (
+            <div style={{ marginTop: 10, display: "flex", gap: 10, flexWrap: "wrap" }}>
+              {graftUnpackHasData ? (
+                <button className="primary" onClick={goToGraftUnpackForm} disabled={savingUnpack}>
+                  Edit Unpacking Form
+                </button>
+              ) : (
+                <button className="primary" onClick={goToGraftUnpackForm} disabled={savingUnpack}>
+                  Unpacking
+                </button>
+              )}
+
+              <button onClick={() => setGraftUnpackState({ step: "idle", code: "", rowIndex: null, record: null })} disabled={savingUnpack}>
+                Done
+              </button>
             </div>
+          )}
 
-            {graftUnpackState.step === "view" && (
-              <div style={{ marginTop: 10, display: "flex", gap: 10, flexWrap: "wrap" }}>
-                {graftUnpackHasData ? (
-                  <button className="primary" onClick={goToGraftUnpackForm} disabled={savingUnpack}>
-                    Edit Unpacking Form
-                  </button>
-                ) : (
-                  <button className="primary" onClick={goToGraftUnpackForm} disabled={savingUnpack}>
-                    Unpacking
-                  </button>
-                )}
+          {graftUnpackState.step === "form" && (
+            <div className="card" style={{ marginTop: 12 }}>
+              <h4>Unpacking Form</h4>
 
-                <button onClick={() => setGraftUnpackState({ step: "idle", code: "", rowIndex: null, record: null })} disabled={savingUnpack}>
-                  Done
+              <label className="field">
+                Unpacking Date
+                <input
+                  type="date"
+                  value={unpackForm.unpackingDate}
+                  onChange={(e) => setUnpackForm((p) => ({ ...p, unpackingDate: e.target.value }))}
+                  disabled={savingUnpack}
+                />
+              </label>
+
+              <label className="field">
+                Unpacking Quantity
+                <input
+                  value={unpackForm.unpackingQuantity}
+                  onChange={(e) => setUnpackForm((p) => ({ ...p, unpackingQuantity: e.target.value }))}
+                  placeholder="number"
+                  disabled={savingUnpack}
+                />
+              </label>
+
+              <label className="field">
+                Note (append)
+                <textarea
+                  value={unpackForm.note}
+                  onChange={(e) => setUnpackForm((p) => ({ ...p, note: e.target.value }))}
+                  rows={3}
+                  disabled={savingUnpack}
+                />
+              </label>
+
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                <button className="primary" onClick={saveGraftingUnpacking} disabled={savingUnpack}>
+                  {savingUnpack ? "Saving..." : "Save Unpacking"}
+                </button>
+                <button onClick={() => setGraftUnpackState((s) => ({ ...s, step: "view" }))} disabled={savingUnpack}>
+                  Cancel
                 </button>
               </div>
-            )}
 
-            {graftUnpackState.step === "form" && (
-              <div className="card" style={{ marginTop: 12 }}>
-                <h4>Unpacking Form</h4>
-
-                <label className="field">
-                  Unpacking Date
-                  <input
-                    type="date"
-                    value={unpackForm.unpackingDate}
-                    onChange={(e) => setUnpackForm((p) => ({ ...p, unpackingDate: e.target.value }))}
-                    disabled={savingUnpack}
-                  />
-                </label>
-
-                <label className="field">
-                  Unpacking Quantity
-                  <input
-                    value={unpackForm.unpackingQuantity}
-                    onChange={(e) => setUnpackForm((p) => ({ ...p, unpackingQuantity: e.target.value }))}
-                    placeholder="number"
-                    disabled={savingUnpack}
-                  />
-                </label>
-
-                <label className="field">
-                  Note (append)
-                  <textarea
-                    value={unpackForm.note}
-                    onChange={(e) => setUnpackForm((p) => ({ ...p, note: e.target.value }))}
-                    rows={3}
-                    disabled={savingUnpack}
-                  />
-                </label>
-
-                <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                  <button className="primary" onClick={saveGraftingUnpacking} disabled={savingUnpack}>
-                    {savingUnpack ? "Saving..." : "Save Unpacking"}
-                  </button>
-                  <button onClick={() => setGraftUnpackState((s) => ({ ...s, step: "view" }))} disabled={savingUnpack}>
-                    Cancel
-                  </button>
-                </div>
-
-                <div style={{ marginTop: 10, fontSize: 12, opacity: 0.8 }}>
-                  Validation: Unpacking Quantity cannot exceed Packing Quantity.
-                </div>
+              <div style={{ marginTop: 10, fontSize: 12, opacity: 0.8 }}>
+                Validation: Unpacking Quantity cannot exceed Packing Quantity.
               </div>
-            )}
-          </div>
+            </div>
+          )}
 
           {renderRecord(graftUnpackState.record)}
         </div>
