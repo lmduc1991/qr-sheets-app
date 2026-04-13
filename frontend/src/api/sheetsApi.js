@@ -113,7 +113,6 @@ function asObjBulk(a, b) {
   return { keys: a, patch: b };
 }
 
-
 // ---------- Tabs ----------
 export async function getSheetTabs(spreadsheetId) {
   const id = String(spreadsheetId || "").trim();
@@ -209,7 +208,6 @@ export async function bulkUpdate(a, b) {
   return r;
 }
 
-
 // ---------- Harvest ----------
 function requireHarvestSettings() {
   const s = normalizeSettings();
@@ -226,7 +224,7 @@ export async function getItemAndHarvestByKey(a) {
   const key = String(keyValue || "").trim();
   if (!key) throw new Error("Missing key value");
 
-// Cache must include keyColumn; user can change key column in Setup.
+  // Cache must include keyColumn; user can change key column in Setup.
   const cacheKey = `item::${s.itemsSpreadsheetId}::${s.itemsSheetName}::${s.itemsKeyColumn}::${key}`;
   const cached = getCached(mem.harvest, cacheKey);
   if (cached) return cached;
@@ -379,7 +377,16 @@ export async function updatePackingByRow({ needs = "or", rowIndex, packingDate, 
   const s = requirePackingSettings(needs);
   const r = await callApi(
     "updatePackingByRow",
-    { spreadsheetId: s.packingSpreadsheetId, sheetName: s._packingSheetName, needs, rowIndex, packingDate, binNumber, packingQuantity, noteAppend },
+    {
+      spreadsheetId: s.packingSpreadsheetId,
+      sheetName: s._packingSheetName,
+      needs,
+      rowIndex,
+      packingDate,
+      binNumber,
+      packingQuantity,
+      noteAppend,
+    },
     { timeoutMs: 15000 }
   );
   return r;
@@ -405,7 +412,46 @@ export async function updateUnpackingByRow({ needs = "or", rowIndex, unpackingDa
   const s = requirePackingSettings(needs);
   const r = await callApi(
     "updateUnpackingByRow",
-    { spreadsheetId: s.packingSpreadsheetId, sheetName: s._packingSheetName, needs, rowIndex, unpackingDate, unpackingQuantity, noteAppend },
+    {
+      spreadsheetId: s.packingSpreadsheetId,
+      sheetName: s._packingSheetName,
+      needs,
+      rowIndex,
+      unpackingDate,
+      unpackingQuantity,
+      noteAppend,
+    },
+    { timeoutMs: 15000 }
+  );
+  return r;
+}
+
+// ---------- Label Check ----------
+export async function getLabelCheckRecordByTwoLabels({
+  spreadsheetId,
+  sheetName,
+  firstLabelColumn,
+  secondLabelColumn,
+  firstLabelValue,
+  secondLabelValue,
+}) {
+  if (!String(spreadsheetId || "").trim()) throw new Error("Missing spreadsheetId");
+  if (!String(sheetName || "").trim()) throw new Error("Missing sheetName");
+  if (!String(firstLabelColumn || "").trim()) throw new Error("Missing firstLabelColumn");
+  if (!String(secondLabelColumn || "").trim()) throw new Error("Missing secondLabelColumn");
+  if (!String(firstLabelValue || "").trim()) throw new Error("Missing firstLabelValue");
+  if (!String(secondLabelValue || "").trim()) throw new Error("Missing secondLabelValue");
+
+  const r = await callApi(
+    "getLabelCheckRecordByTwoLabels",
+    {
+      spreadsheetId: String(spreadsheetId).trim(),
+      sheetName: String(sheetName).trim(),
+      firstLabelColumn: String(firstLabelColumn).trim(),
+      secondLabelColumn: String(secondLabelColumn).trim(),
+      firstLabelValue: String(firstLabelValue).trim(),
+      secondLabelValue: String(secondLabelValue).trim(),
+    },
     { timeoutMs: 15000 }
   );
   return r;
