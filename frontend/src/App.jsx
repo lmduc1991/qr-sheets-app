@@ -7,10 +7,10 @@ import ItemsManagementPage from "./pages/ItemsManagementPage";
 import HarvestManagementPage from "./pages/HarvestManagementPage";
 import BinStoragePage from "./pages/BinStoragePage";
 import PackingUnpackingManagementPage from "./pages/PackingUnpackingManagementPage";
+import LabelCheckPage from "./pages/LabelCheckPage";
 import { loadSettings, onSettingsChange } from "./store/settingsStore";
 
 export default function App() {
-  // Existing settings logic
   const [settings, setSettings] = useState(() => loadSettings());
   const hasSetup = !!settings?.proxyUrl;
 
@@ -18,7 +18,6 @@ export default function App() {
     return onSettingsChange((s) => setSettings(s));
   }, []);
 
-  // No auth gating. App is accessible immediately.
   return (
     <div className="app-layout">
       <header className="app-header">
@@ -39,6 +38,10 @@ export default function App() {
 
           <NavLink className={({ isActive }) => "tab" + (isActive ? " tab-active" : "")} to="/packing">
             Packing / Unpacking
+          </NavLink>
+
+          <NavLink className={({ isActive }) => "tab" + (isActive ? " tab-active" : "")} to="/label-check">
+            Label Check
           </NavLink>
 
           <NavLink className={({ isActive }) => "tab" + (isActive ? " tab-active" : "")} to="/setup">
@@ -70,6 +73,11 @@ export default function App() {
           <Route
             path="/packing"
             element={hasSetup ? <PackingUnpackingManagementPage /> : <Navigate to="/setup" replace />}
+          />
+
+          <Route
+            path="/label-check"
+            element={hasSetup ? <LabelCheckPage /> : <Navigate to="/setup" replace />}
           />
 
           <Route path="*" element={<Navigate to="/" replace />} />
