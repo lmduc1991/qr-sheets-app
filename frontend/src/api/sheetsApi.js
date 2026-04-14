@@ -426,6 +426,36 @@ export async function updateUnpackingByRow({ needs = "or", rowIndex, unpackingDa
   return r;
 }
 
+// ---------- Grafting selection helpers ----------
+export async function getGraftingRowsByScionRootstock({ scionLabelValue, rootstockLabelValue }) {
+  const s = requirePackingSettings("grafting");
+  const r = await callApi(
+    "getGraftingRowsByScionRootstock",
+    {
+      spreadsheetId: s.packingSpreadsheetId,
+      sheetName: s._packingSheetName,
+      scionLabelValue: String(scionLabelValue || "").trim(),
+      rootstockLabelValue: String(rootstockLabelValue || "").trim(),
+    },
+    { timeoutMs: 15000 }
+  );
+  return r;
+}
+
+export async function getGraftingRowsByCombinationLabel({ combinationLabelValue }) {
+  const s = requirePackingSettings("grafting");
+  const r = await callApi(
+    "getGraftingRowsByCombinationLabel",
+    {
+      spreadsheetId: s.packingSpreadsheetId,
+      sheetName: s._packingSheetName,
+      combinationLabelValue: String(combinationLabelValue || "").trim(),
+    },
+    { timeoutMs: 15000 }
+  );
+  return r;
+}
+
 // ---------- Label Check ----------
 export async function getLabelCheckRecordByTwoLabels({
   spreadsheetId,
@@ -444,6 +474,36 @@ export async function getLabelCheckRecordByTwoLabels({
 
   const r = await callApi(
     "getLabelCheckRecordByTwoLabels",
+    {
+      spreadsheetId: String(spreadsheetId).trim(),
+      sheetName: String(sheetName).trim(),
+      firstLabelColumn: String(firstLabelColumn).trim(),
+      secondLabelColumn: String(secondLabelColumn).trim(),
+      firstLabelValue: String(firstLabelValue).trim(),
+      secondLabelValue: String(secondLabelValue).trim(),
+    },
+    { timeoutMs: 15000 }
+  );
+  return r;
+}
+
+export async function getLabelCheckRowsByTwoLabels({
+  spreadsheetId,
+  sheetName,
+  firstLabelColumn,
+  secondLabelColumn,
+  firstLabelValue,
+  secondLabelValue,
+}) {
+  if (!String(spreadsheetId || "").trim()) throw new Error("Missing spreadsheetId");
+  if (!String(sheetName || "").trim()) throw new Error("Missing sheetName");
+  if (!String(firstLabelColumn || "").trim()) throw new Error("Missing firstLabelColumn");
+  if (!String(secondLabelColumn || "").trim()) throw new Error("Missing secondLabelColumn");
+  if (!String(firstLabelValue || "").trim()) throw new Error("Missing firstLabelValue");
+  if (!String(secondLabelValue || "").trim()) throw new Error("Missing secondLabelValue");
+
+  const r = await callApi(
+    "getLabelCheckRowsByTwoLabels",
     {
       spreadsheetId: String(spreadsheetId).trim(),
       sheetName: String(sheetName).trim(),
