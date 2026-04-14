@@ -1,8 +1,7 @@
-// src/pages/ItemBulkScanPage.jsx
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Html5QrcodeScanner } from "html5-qrcode";
 import { loadSettings } from "../store/settingsStore";
 import { getHeaders, bulkUpdate } from "../api/sheetsApi";
+import { startQrScanner } from "../utils/qrScanner";
 
 export default function ItemBulkScanPage() {
   const settings = useMemo(() => loadSettings(), []);
@@ -21,54 +20,45 @@ export default function ItemBulkScanPage() {
   const [isScanning, setIsScanning] = useState(false);
 
   const scannerRef = useRef(null);
+  const lastScanRef = useRef({ value: "", ts: 0 });
 
   const stopScanner = async () => {
     if (scannerRef.current) {
       try {
-        await scannerRef.current.clear();
-      } catch {}
+        await scannerRef.current.stop();
+      } catch {
+        // ignore
+      }
       scannerRef.current = null;
     }
     setIsScanning(false);
   };
 
-  const startScanner = () => {
+  const startScanner = async () => {
     if (scannerRef.current) return;
 
     setError("");
     setStatus("");
-
     setIsScanning(true);
 
-    setTimeout(() => {
-      const el = document.getElementById("bulk-scan-reader");
-      if (!el) {
-        setError("Scanner container not ready.");
-        setIsScanning(false);
-        return;
-      }
-      el.innerHTML = "";
-
-      const qrbox = Math.min(340, Math.floor(window.innerWidth * 0.8));
-      const scanner = new Html5QrcodeScanner(
-        "bulk-scan-reader",
-        { fps: 15, qrbox, experimentalFeatures: { useBarCodeDetectorIfSupported: true } },
-        false
-      );
-
-      scanner.render(
-        async (decodedText) => {
+    try {
+      scannerRef.current = await startQrScanner({
+        elementId: "bulk-scan-reader",
+        onScan: async (decodedText) => {
           const key = String(decodedText || "").trim();
           if (!key) return;
 
-          // Deduplicate
+          const now = Date.now();
+          if (lastScanRef.current.value === key && now - lastScanRef.current.ts < 1200) return;
+          lastScanRef.current = { value: key, ts: now };
+
           setKeys((prev) => Array.from(new Set([...prev.map(String), String(key)])));
         },
-        () => {}
-      );
-
-      scannerRef.current = scanner;
-    }, 0);
+      });
+    } catch (e) {
+      await stopScanner();
+      setError(e?.message || "Failed to start scanner.");
+    }
   };
 
   const loadCols = async () => {
@@ -116,7 +106,6 @@ export default function ItemBulkScanPage() {
   useEffect(() => {
     loadCols();
     return () => stopScanner();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   if (!settings?.proxyUrl) return <div>Please go to Setup first.</div>;
@@ -144,7 +133,6 @@ export default function ItemBulkScanPage() {
         )}
       </div>
 
-      {/* IMPORTANT: always mounted so Html5QrcodeScanner can render reliably */}
       <div style={{ marginTop: 10, display: isScanning ? "block" : "none" }}>
         <div id="bulk-scan-reader" />
       </div>
