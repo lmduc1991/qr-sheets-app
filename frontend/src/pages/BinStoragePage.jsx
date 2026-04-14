@@ -1,6 +1,4 @@
-// src/pages/BinStoragePage.jsx
 import { useEffect, useRef, useState } from "react";
-import { Html5QrcodeScanner } from "html5-qrcode";
 import { loadSettings, saveSettings, onSettingsChange } from "../store/settingsStore";
 import {
   getSheetTabs,
@@ -8,6 +6,7 @@ import {
   appendBinStorage,
   getExistingChildrenForParent,
 } from "../api/sheetsApi";
+import { startQrScanner } from "../utils/qrScanner";
 
 function extractSpreadsheetId(url) {
   const m = String(url || "").match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
@@ -19,11 +18,9 @@ function uniq(arr) {
 }
 
 export default function BinStoragePage() {
-  // Reactive settings
   const [settings, setSettings] = useState(() => loadSettings());
   useEffect(() => onSettingsChange(setSettings), []);
 
-  // Setup states
   const [setupOpen, setSetupOpen] = useState(false);
   const [setupMsg, setSetupMsg] = useState("");
   const [setupErr, setSetupErr] = useState("");
@@ -59,7 +56,6 @@ export default function BinStoragePage() {
       const list = await getSheetTabs(storageSpreadsheetId);
       setTabs(list);
 
-      // gentle defaults
       if (!bagStorageSheetName) {
         const d = list.find((n) => n.toLowerCase().includes("bag")) || "";
         if (d) setBagStorageSheetName(d);
@@ -103,11 +99,8 @@ export default function BinStoragePage() {
     }
   };
 
-  // ---------------------------
-  // Scan workflow
-  // ---------------------------
-  const [mode, setMode] = useState("bag"); // bag -> vines OR bin -> bags
-  const [step, setStep] = useState("idle"); // idle | scanParent | scanChildren
+  const [mode, setMode] = useState("bag");
+  const [step, setStep] = useState("idle");
 
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
@@ -115,7 +108,6 @@ export default function BinStoragePage() {
   const [parentLabel, setParentLabel] = useState("");
   const [children, setChildren] = useState([]);
 
-  // existing values already in sheet for that parent
   const existingSetRef = useRef(new Set());
   const [existingCount, setExistingCount] = useState(0);
 
@@ -125,54 +117,42 @@ export default function BinStoragePage() {
   const scanLockRef = useRef(false);
   const lastScanRef = useRef({ value: "", ts: 0 });
 
-  // Scan protection
   const SCAN_LOCK_MS = 800;
   const DEDUPE_SAME_VALUE_MS = 2500;
 
   const popup = (msg) => {
-    // Same behavior as Harvest Management (requires OK)
     try {
       alert(String(msg || ""));
-    } catch {}
+    } catch {
+      // ignore
+    }
   };
 
   const stopScanner = async () => {
     if (scannerRef.current) {
       try {
-        await scannerRef.current.clear();
-      } catch {}
+        await scannerRef.current.stop();
+      } catch {
+        // ignore
+      }
       scannerRef.current = null;
     }
+    scanLockRef.current = false;
   };
 
-  const startScanner = (domId, onScan) => {
+  const startScanner = async (domId, onScan) => {
     if (scannerRef.current) return;
 
-    const el = document.getElementById(domId);
-    if (el) el.innerHTML = "";
-
-    const qrbox = Math.min(340, Math.floor(window.innerWidth * 0.8));
-    const scanner = new Html5QrcodeScanner(
-      domId,
-      { fps: 15, qrbox, experimentalFeatures: { useBarCodeDetectorIfSupported: true } },
-      false
-    );
-
-    scanner.render(
-      async (decodedText) => {
+    scannerRef.current = await startQrScanner({
+      elementId: domId,
+      onScan: async (decodedText) => {
         const v = String(decodedText || "").trim();
         if (!v) return;
 
-        // Prevent double fires / camera jitter duplicates
         const now = Date.now();
-
-        // If same QR is detected repeatedly within a short window, ignore it.
-        if (lastScanRef.current.value === v && now - lastScanRef.current.ts < DEDUPE_SAME_VALUE_MS) {
-          return;
-        }
-
-        // Global lock to avoid multiple callbacks firing at once.
+        if (lastScanRef.current.value === v && now - lastScanRef.current.ts < DEDUPE_SAME_VALUE_MS) return;
         if (scanLockRef.current) return;
+
         scanLockRef.current = true;
         lastScanRef.current = { value: v, ts: now };
 
@@ -184,10 +164,7 @@ export default function BinStoragePage() {
           }, SCAN_LOCK_MS);
         }
       },
-      () => {}
-    );
-
-    scannerRef.current = scanner;
+    });
   };
 
   const resetFlow = async () => {
@@ -217,8 +194,8 @@ export default function BinStoragePage() {
     setStep("scanParent");
     setStatus(mode === "bag" ? "Scan Bag label first." : "Scan Bin label first.");
 
-    setTimeout(() => {
-      startScanner("storage-parent-reader", async (label) => {
+    try {
+      await startScanner("storage-parent-reader", async (label) => {
         if (isSaving) return;
 
         await stopScanner();
@@ -244,36 +221,37 @@ export default function BinStoragePage() {
         setStep("scanChildren");
         setStatus(mode === "bag" ? "Now bulk scan Vine labels into this Bag." : "Now bulk scan Bag labels into this Bin.");
 
-        setTimeout(() => {
-          startScanner("storage-children-reader", (child) => {
-            if (isSaving) return;
+        await startScanner("storage-children-reader", (child) => {
+          if (isSaving) return;
 
-            const v = String(child || "").trim();
-            if (!v) return;
+          const v = String(child || "").trim();
+          if (!v) return;
 
-            setChildren((prev) => {
-              if (prev.includes(v)) {
-                popup(`Duplicate ignored: "${v}" already scanned.`);
-                setStatus(`Duplicate ignored: "${v}" already scanned.`);
-                return prev;
-              }
+          setChildren((prev) => {
+            if (prev.includes(v)) {
+              popup(`Duplicate ignored: "${v}" already scanned.`);
+              setStatus(`Duplicate ignored: "${v}" already scanned.`);
+              return prev;
+            }
 
-              if (existingSetRef.current.has(v)) {
-                const msg =
-                  mode === "bag"
-                    ? `Duplicate ignored: Bag "${parentLabel}" already contains vine "${v}".`
-                    : `Duplicate ignored: Bin "${parentLabel}" already contains bag "${v}".`;
-                popup(msg);
-                setStatus(msg);
-                return prev;
-              }
+            if (existingSetRef.current.has(v)) {
+              const msg =
+                mode === "bag"
+                  ? `Duplicate ignored: Bag "${parentLabel}" already contains vine "${v}".`
+                  : `Duplicate ignored: Bin "${parentLabel}" already contains bag "${v}".`;
+              popup(msg);
+              setStatus(msg);
+              return prev;
+            }
 
-              return [...prev, v];
-            });
+            return [...prev, v];
           });
-        }, 120);
+        });
       });
-    }, 120);
+    } catch (e) {
+      await resetFlow();
+      setError(e?.message || "Failed to start scanner.");
+    }
   };
 
   const removeChild = (v) => setChildren((prev) => prev.filter((x) => x !== v));
@@ -516,4 +494,3 @@ export default function BinStoragePage() {
     </div>
   );
 }
-
