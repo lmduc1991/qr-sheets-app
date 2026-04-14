@@ -1,8 +1,7 @@
-// src/pages/ItemScanPage.jsx
 import { useEffect, useRef, useState } from "react";
-import { Html5QrcodeScanner } from "html5-qrcode";
 import { loadSettings, onSettingsChange } from "../store/settingsStore";
 import { getItemByKey, updateItemByKey } from "../api/sheetsApi";
+import { startQrScanner } from "../utils/qrScanner";
 
 function PrettyDetails({ item, preferredOrder = [] }) {
   if (!item) return null;
@@ -52,7 +51,7 @@ export default function ItemScanPage() {
   const [error, setError] = useState("");
 
   const [scannedKey, setScannedKey] = useState("");
-  const [keyUsed, setKeyUsed] = useState(""); // actual key used to match Sheets
+  const [keyUsed, setKeyUsed] = useState("");
   const [headers, setHeaders] = useState([]);
   const [item, setItem] = useState(null);
 
@@ -63,14 +62,18 @@ export default function ItemScanPage() {
   const [isScanning, setIsScanning] = useState(false);
 
   const scannerRef = useRef(null);
+  const scanLockRef = useRef(false);
 
   const stopScanner = async () => {
     if (scannerRef.current) {
       try {
-        await scannerRef.current.clear();
-      } catch {}
+        await scannerRef.current.stop();
+      } catch {
+        // ignore
+      }
       scannerRef.current = null;
     }
+    scanLockRef.current = false;
     setIsScanning(false);
   };
 
@@ -79,43 +82,27 @@ export default function ItemScanPage() {
 
     setError("");
     setStatus("");
-
-    // Always ensure the container exists and is cleared
-    const el = document.getElementById("item-scan-reader");
-    if (!el) {
-      setError("Scanner container not ready.");
-      return;
-    }
-    el.innerHTML = "";
-
     setIsScanning(true);
 
-    // Defer scanner initialization one tick (fixes “Start Scanning does nothing” timing issue)
-    setTimeout(() => {
-      try {
-        const qrbox = Math.min(340, Math.floor(window.innerWidth * 0.8));
-        const scanner = new Html5QrcodeScanner(
-          "item-scan-reader",
-          { fps: 15, qrbox, experimentalFeatures: { useBarCodeDetectorIfSupported: true } },
-          false
-        );
-
-        scanner.render(
-          async (decodedText) => {
-            const key = String(decodedText || "").trim();
-            if (!key) return;
-            await stopScanner();
-            await loadItem(key);
-          },
-          () => {}
-        );
-
-        scannerRef.current = scanner;
-      } catch (e) {
-        setIsScanning(false);
-        setError(e?.message || "Failed to start scanner.");
-      }
-    }, 0);
+    try {
+      scannerRef.current = await startQrScanner({
+        elementId: "item-scan-reader",
+        onScan: async (decodedText) => {
+          if (scanLockRef.current) return;
+          scanLockRef.current = true;
+          const key = String(decodedText || "").trim();
+          if (!key) {
+            scanLockRef.current = false;
+            return;
+          }
+          await stopScanner();
+          await loadItem(key);
+        },
+      });
+    } catch (e) {
+      await stopScanner();
+      setError(e?.message || "Failed to start scanner.");
+    }
   };
 
   const loadItem = async (key) => {
@@ -137,11 +124,10 @@ export default function ItemScanPage() {
         return;
       }
 
-      // If Sheets matched the stripped version, preserve it for update/write
-      setKeyUsed(r._keyUsed || key);
+      setKeyUsed(r._keyUsed || r.keyUsed || key);
 
-      if ((r._keyUsed || key) !== key) {
-        setStatus(`Item loaded. Note: Sheet key is "${r._keyUsed}" (scanned "${key}").`);
+      if ((r._keyUsed || r.keyUsed || key) !== key) {
+        setStatus(`Item loaded. Note: Sheet key is "${r._keyUsed || r.keyUsed}" (scanned "${key}").`);
       } else {
         setStatus("Item loaded.");
       }
@@ -168,7 +154,6 @@ export default function ItemScanPage() {
         patch[h] = form[h] ?? "";
       });
 
-      // Use keyUsed so updates hit the correct row even if Sheets dropped leading zeros.
       const targetKey = String(keyUsed || scannedKey || "").trim();
       const r = await updateItemByKey(targetKey, patch);
 
@@ -199,7 +184,6 @@ export default function ItemScanPage() {
     return () => {
       stopScanner();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   if (!settings?.proxyUrl) return <div>Please go to Setup first.</div>;
@@ -217,8 +201,7 @@ export default function ItemScanPage() {
             Scan QR from your Key Column: <strong>{keyColumn}</strong>
             {itemsSheetName ? (
               <>
-                {" "}
-                (Items tab: <strong>{itemsSheetName}</strong>)
+                {" "}(Items tab: <strong>{itemsSheetName}</strong>)
               </>
             ) : null}
           </p>
@@ -233,7 +216,6 @@ export default function ItemScanPage() {
             )}
           </div>
 
-          {/* IMPORTANT: always mounted so Html5QrcodeScanner can render reliably */}
           <div style={{ marginTop: 10, display: isScanning ? "block" : "none" }}>
             <div id="item-scan-reader" />
           </div>
