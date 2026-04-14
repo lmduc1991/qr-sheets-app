@@ -56,7 +56,7 @@ function pickBackCamera(cameras = []) {
   return [...cameras].sort((a, b) => score(b?.label) - score(a?.label))[0] || cameras[0] || null;
 }
 
-export async function startQrScanner({ elementId, onScan, fps = 15 }) {
+export async function startQrScanner({ elementId, onScan, fps = 18 }) {
   if (!elementId) throw new Error("Missing scanner elementId.");
   if (typeof onScan !== "function") throw new Error("Missing scanner callback.");
 
