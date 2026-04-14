@@ -1,11 +1,10 @@
-// src/pages/HarvestManagementPage.jsx
 import { useEffect, useRef, useState } from "react";
-import { Html5QrcodeScanner } from "html5-qrcode";
 import { loadSettings, saveSettings, onSettingsChange } from "../store/settingsStore";
 import { getItemAndHarvestByKey, appendHarvestLog, updateHarvestLogByRow } from "../api/sheetsApi";
 import { getPhotoCount } from "../store/harvestStore";
 import HarvestCapture from "../components/HarvestCapture";
 import ExportHarvestZipButton from "../components/ExportHarvestZipButton";
+import { startQrScanner } from "../utils/qrScanner";
 
 function today() {
   const d = new Date();
@@ -20,7 +19,6 @@ function extractSpreadsheetId(url) {
   return m ? m[1] : "";
 }
 
-// Normalize purely numeric strings to avoid leading-zero mismatch
 function stripLeadingZeros(s) {
   const x = String(s ?? "");
   if (!/^\d+$/.test(x)) return x;
@@ -118,8 +116,8 @@ export default function HarvestManagementPage() {
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
 
-  const [itemKey, setItemKey] = useState("");       // scanned
-  const [itemKeyUsed, setItemKeyUsed] = useState(""); // actual key used to match Sheets (may be stripped)
+  const [itemKey, setItemKey] = useState("");
+  const [itemKeyUsed, setItemKeyUsed] = useState("");
   const [item, setItem] = useState(null);
   const [headers, setHeaders] = useState([]);
 
@@ -147,33 +145,33 @@ export default function HarvestManagementPage() {
   const [isSaving, setIsSaving] = useState(false);
 
   const scannerRef = useRef(null);
+  const scanLockRef = useRef(false);
 
   const stopScanner = async () => {
     if (scannerRef.current) {
       try {
-        await scannerRef.current.clear();
-      } catch {}
+        await scannerRef.current.stop();
+      } catch {
+        // ignore
+      }
       scannerRef.current = null;
     }
+    scanLockRef.current = false;
   };
 
-  const startScanner = (domId, onScanOnce) => {
+  const startScanner = async (domId, onScanOnce) => {
     if (scannerRef.current) return;
 
-    const el = document.getElementById(domId);
-    if (el) el.innerHTML = "";
-
-    const qrbox = Math.min(340, Math.floor(window.innerWidth * 0.8));
-    const scanner = new Html5QrcodeScanner(
-      domId,
-      { fps: 15, qrbox, experimentalFeatures: { useBarCodeDetectorIfSupported: true } },
-      false
-    );
-
-    scanner.render(
-      async (decodedText) => {
+    scannerRef.current = await startQrScanner({
+      elementId: domId,
+      onScan: async (decodedText) => {
+        if (scanLockRef.current) return;
+        scanLockRef.current = true;
         const key = String(decodedText || "").trim();
-        if (!key) return;
+        if (!key) {
+          scanLockRef.current = false;
+          return;
+        }
 
         try {
           await stopScanner();
@@ -184,10 +182,7 @@ export default function HarvestManagementPage() {
           setStep("scanItem");
         }
       },
-      () => {}
-    );
-
-    scannerRef.current = scanner;
+    });
   };
 
   const resetStateForNewScan = () => {
@@ -225,8 +220,9 @@ export default function HarvestManagementPage() {
     setStep("scanItem");
 
     await stopScanner();
-    setTimeout(() => {
-      startScanner("harvest-item-reader", async (key) => {
+
+    try {
+      await startScanner("harvest-item-reader", async (key) => {
         setError("");
         setStatus("Loading item + log row…");
 
@@ -239,12 +235,11 @@ export default function HarvestManagementPage() {
         }
 
         setItemKey(key);
-        setItemKeyUsed(r?._keyUsed || key);
-
+        setItemKeyUsed(r?.itemKeyUsed || r?._keyUsed || key);
         setItem(r?.item || null);
 
-        if ((r?._keyUsed || key) !== key) {
-          setStatus(`Item loaded. Note: Sheet key is "${r._keyUsed}" (scanned "${key}").`);
+        if ((r?.itemKeyUsed || r?._keyUsed || key) !== key) {
+          setStatus(`Item loaded. Note: Sheet key is "${r.itemKeyUsed || r._keyUsed}" (scanned "${key}").`);
         }
 
         if (r?.harvestFound) {
@@ -269,17 +264,20 @@ export default function HarvestManagementPage() {
           });
           setProcessingFormMode("view");
 
-          if ((r?._keyUsed || key) === key) setStatus("Item loaded (log record exists).");
+          if ((r?.itemKeyUsed || r?._keyUsed || key) === key) setStatus("Item loaded (log record exists).");
         } else {
           setHarvestExists(false);
           setHarvestRow(null);
           setHarvestFormMode("create");
-          if ((r?._keyUsed || key) === key) setStatus("Item loaded (no log record yet).");
+          if ((r?.itemKeyUsed || r?._keyUsed || key) === key) setStatus("Item loaded (no log record yet).");
         }
 
         setStep("viewItem");
       });
-    }, 150);
+    } catch (e) {
+      setStep("idle");
+      setError(e?.message || "Failed to start scanner.");
+    }
   };
 
   const verifyLabel = async (domId, nextStep) => {
@@ -287,9 +285,8 @@ export default function HarvestManagementPage() {
     setStatus("Scan label QR (must match item).");
     await stopScanner();
 
-    setTimeout(() => {
-      startScanner(domId, async (scanned) => {
-        // Compare normalized keys so 07617 matches 7617
+    try {
+      await startScanner(domId, async (scanned) => {
         if (keysMatch(scanned, itemKeyUsed || itemKey)) {
           setError("");
           setStatus("Matched.");
@@ -297,9 +294,12 @@ export default function HarvestManagementPage() {
           return;
         }
         alert("QR not match, please scan another");
-        verifyLabel(domId, nextStep);
+        await verifyLabel(domId, nextStep);
       });
-    }, 150);
+    } catch (e) {
+      setError(e?.message || "Failed to start scanner.");
+      setStep("viewItem");
+    }
   };
 
   const beginVerifyHarvest = async () => {
