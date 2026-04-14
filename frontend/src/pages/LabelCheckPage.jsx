@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Html5QrcodeScanner } from "html5-qrcode";
 import { loadSettings, saveSettings, onSettingsChange } from "../store/settingsStore";
-import { getSheetTabs, getHeaders, getLabelCheckRecordByTwoLabels } from "../api/sheetsApi";
+import { getSheetTabs, getHeaders, getLabelCheckRowsByTwoLabels } from "../api/sheetsApi";
+import { startQrScanner } from "../utils/qrScanner";
+
+const DUPLICATE_COMBO_NO_MSG = "There are duplicated values in the Combination Label No. column";
 
 function extractSpreadsheetId(urlOrId) {
   const s = String(urlOrId || "").trim();
@@ -14,7 +16,9 @@ function extractSpreadsheetId(urlOrId) {
 function popup(msg) {
   try {
     alert(String(msg || ""));
-  } catch {}
+  } catch {
+    // ignore
+  }
 }
 
 function PrettyDetails({ record, preferredOrder = [] }) {
@@ -84,7 +88,12 @@ export default function LabelCheckPage() {
   ]);
 
   const spreadsheetId = useMemo(() => extractSpreadsheetId(fileUrl), [fileUrl]);
-  const ready = !!settings?.proxyUrl && !!settings?.labelCheckSpreadsheetId && !!settings?.labelCheckSheetName && !!settings?.labelCheckFirstLabelColumn && !!settings?.labelCheckSecondLabelColumn;
+  const ready =
+    !!settings?.proxyUrl &&
+    !!settings?.labelCheckSpreadsheetId &&
+    !!settings?.labelCheckSheetName &&
+    !!settings?.labelCheckFirstLabelColumn &&
+    !!settings?.labelCheckSecondLabelColumn;
 
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
@@ -94,16 +103,22 @@ export default function LabelCheckPage() {
   const [secondScanned, setSecondScanned] = useState("");
   const [matchedRowIndex, setMatchedRowIndex] = useState(null);
   const [matchedRecord, setMatchedRecord] = useState(null);
+  const [selectionRows, setSelectionRows] = useState([]);
+  const [selectedCombinationLabelNo, setSelectedCombinationLabelNo] = useState("");
 
   const scannerRef = useRef(null);
+  const scanLockRef = useRef(false);
 
   const stopScanner = async () => {
     if (scannerRef.current) {
       try {
-        await scannerRef.current.clear();
-      } catch {}
+        await scannerRef.current.stop();
+      } catch {
+        // ignore
+      }
       scannerRef.current = null;
     }
+    scanLockRef.current = false;
   };
 
   useEffect(() => {
@@ -112,23 +127,20 @@ export default function LabelCheckPage() {
     };
   }, []);
 
-  const startScanner = (domId, onScanOnce) => {
+  const startScanner = async (domId, onScanOnce) => {
     if (scannerRef.current) return;
 
-    const el = document.getElementById(domId);
-    if (el) el.innerHTML = "";
+    scannerRef.current = await startQrScanner({
+      elementId: domId,
+      onScan: async (decodedText) => {
+        if (scanLockRef.current) return;
+        scanLockRef.current = true;
 
-    const qrbox = Math.min(340, Math.floor(window.innerWidth * 0.8));
-    const scanner = new Html5QrcodeScanner(
-      domId,
-      { fps: 15, qrbox, experimentalFeatures: { useBarCodeDetectorIfSupported: true } },
-      false
-    );
-
-    scanner.render(
-      async (decodedText) => {
         const value = String(decodedText || "").trim();
-        if (!value) return;
+        if (!value) {
+          scanLockRef.current = false;
+          return;
+        }
 
         try {
           await stopScanner();
@@ -139,10 +151,7 @@ export default function LabelCheckPage() {
           setStep("idle");
         }
       },
-      () => {}
-    );
-
-    scannerRef.current = scanner;
+    });
   };
 
   const resetFlow = async () => {
@@ -154,6 +163,8 @@ export default function LabelCheckPage() {
     setSecondScanned("");
     setMatchedRowIndex(null);
     setMatchedRecord(null);
+    setSelectionRows([]);
+    setSelectedCombinationLabelNo("");
   };
 
   const loadTabs = async () => {
@@ -223,6 +234,43 @@ export default function LabelCheckPage() {
     setSetupOpen(false);
   };
 
+  const applyResult = async (res) => {
+    if (!res?.found) {
+      popup("Label Not Match");
+      await resetFlow();
+      return;
+    }
+
+    setHeaders(res.headers || []);
+
+    if (res?.duplicateCombinationLabelNo) {
+      popup(DUPLICATE_COMBO_NO_MSG);
+      await resetFlow();
+      return;
+    }
+
+    const rows = Array.isArray(res.rows) ? res.rows : [];
+    if (rows.length > 1) {
+      setSelectionRows(rows);
+      setSelectedCombinationLabelNo(String(rows[0]?.combinationLabelNo || ""));
+      setStep("selectCombinationNo");
+      setStatus("Choose the Combination Label No. to open the matched record.");
+      return;
+    }
+
+    const chosen = rows[0] || (res.rowIndex && res.record ? { rowIndex: res.rowIndex, record: res.record } : null);
+    if (!chosen) {
+      popup("Label Not Match");
+      await resetFlow();
+      return;
+    }
+
+    setMatchedRowIndex(chosen.rowIndex || null);
+    setMatchedRecord(chosen.record || null);
+    setStatus("Label matched.");
+    setStep("result");
+  };
+
   const begin = async () => {
     setStatus("");
     setError("");
@@ -230,55 +278,57 @@ export default function LabelCheckPage() {
     setSecondScanned("");
     setMatchedRowIndex(null);
     setMatchedRecord(null);
+    setSelectionRows([]);
+    setSelectedCombinationLabelNo("");
     setStep("scanFirst");
 
     await stopScanner();
-    setTimeout(() => {
-      startScanner("label-check-first-reader", async (value) => {
+
+    try {
+      await startScanner("label-check-first-reader", async (value) => {
         setFirstScanned(value);
         setStatus("First label scanned. Now scan the second label.");
         setError("");
         setStep("scanSecond");
 
-        setTimeout(() => {
-          startScanner("label-check-second-reader", async (value2) => {
-            setSecondScanned(value2);
-            setStatus("Checking labels...");
-            setError("");
+        await startScanner("label-check-second-reader", async (value2) => {
+          setSecondScanned(value2);
+          setStatus("Checking labels...");
+          setError("");
 
-            try {
-              const res = await getLabelCheckRecordByTwoLabels({
-                spreadsheetId: settings?.labelCheckSpreadsheetId,
-                sheetName: settings?.labelCheckSheetName,
-                firstLabelColumn: settings?.labelCheckFirstLabelColumn,
-                secondLabelColumn: settings?.labelCheckSecondLabelColumn,
-                firstLabelValue: value,
-                secondLabelValue: value2,
-              });
-
-              if (!res?.found) {
-                popup("Label Not Match");
-                await resetFlow();
-                return;
-              }
-
-              setMatchedRowIndex(res.rowIndex || null);
-              setMatchedRecord(res.record || null);
-              setStatus("Label matched.");
-              setStep("result");
-            } catch (e) {
-              const msg = e?.message || "Label check failed.";
-              if (msg === "There are multirow in the label check log") {
-                popup(msg);
-                await resetFlow();
-                return;
-              }
-              throw e;
-            }
+          const res = await getLabelCheckRowsByTwoLabels({
+            spreadsheetId: settings?.labelCheckSpreadsheetId,
+            sheetName: settings?.labelCheckSheetName,
+            firstLabelColumn: settings?.labelCheckFirstLabelColumn,
+            secondLabelColumn: settings?.labelCheckSecondLabelColumn,
+            firstLabelValue: value,
+            secondLabelValue: value2,
           });
-        }, 120);
+
+          await applyResult(res);
+        });
       });
-    }, 120);
+    } catch (e) {
+      await resetFlow();
+      setError(e?.message || "Failed to start scanner.");
+    }
+  };
+
+  const confirmSelection = async () => {
+    const selected = selectionRows.find(
+      (row) => String(row?.combinationLabelNo || "") === String(selectedCombinationLabelNo || "")
+    );
+
+    if (!selected) {
+      setError("Please choose a Combination Label No.");
+      return;
+    }
+
+    setMatchedRowIndex(selected.rowIndex || null);
+    setMatchedRecord(selected.record || null);
+    setSelectionRows([]);
+    setStatus("Label matched.");
+    setStep("result");
   };
 
   if (!settings?.proxyUrl) return <div className="page">Please go to Setup first.</div>;
@@ -418,6 +468,38 @@ export default function LabelCheckPage() {
           <button style={{ marginTop: 10 }} onClick={resetFlow}>
             Cancel
           </button>
+        </div>
+      )}
+
+      {step === "selectCombinationNo" && (
+        <div className="card">
+          <div style={{ marginBottom: 12 }}>
+            <strong>First label:</strong> {firstScanned}
+          </div>
+          <div style={{ marginBottom: 12 }}>
+            <strong>Second label:</strong> {secondScanned}
+          </div>
+
+          <label className="field">
+            Choose Combination Label No.
+            <select
+              value={selectedCombinationLabelNo}
+              onChange={(e) => setSelectedCombinationLabelNo(e.target.value)}
+            >
+              {selectionRows.map((row) => (
+                <option key={`${row.rowIndex}-${row.combinationLabelNo}`} value={String(row.combinationLabelNo || "")}>
+                  {String(row.combinationLabelNo || "(blank)")}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
+            <button className="primary" onClick={confirmSelection}>
+              Open Record
+            </button>
+            <button onClick={resetFlow}>Cancel</button>
+          </div>
         </div>
       )}
 
