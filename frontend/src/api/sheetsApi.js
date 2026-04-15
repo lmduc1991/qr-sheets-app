@@ -113,7 +113,7 @@ export async function getSheetTabs(spreadsheetId) {
 
   const r = await callApi("getSheetTabs", { spreadsheetId: id }, { timeoutMs: 12000 });
   const tabs = r.tabs || [];
-  setCached(mem.tabs, id, tabs, 60_000);
+  setCached(mem.tabs, id, tabs, 60000);
   return tabs;
 }
 
@@ -149,7 +149,7 @@ export async function getItemByKey(a) {
     { timeoutMs: 12000 }
   );
 
-  setCached(mem.items, cacheKey, r, 10_000);
+  setCached(mem.items, cacheKey, r, 10000);
   return r;
 }
 
@@ -217,13 +217,20 @@ export async function getItemAndHarvestByKey(a) {
     "getItemAndHarvestByKey",
     {
       keyValue: key,
-      items: { spreadsheetId: s.itemsSpreadsheetId, sheetName: s.itemsSheetName, keyColumn: s.itemsKeyColumn },
-      harvest: { spreadsheetId: h.harvestSpreadsheetId, sheetName: h.harvestSheetName },
+      items: {
+        spreadsheetId: s.itemsSpreadsheetId,
+        sheetName: s.itemsSheetName,
+        keyColumn: s.itemsKeyColumn,
+      },
+      harvest: {
+        spreadsheetId: h.harvestSpreadsheetId,
+        sheetName: h.harvestSheetName,
+      },
     },
     { timeoutMs: 15000 }
   );
 
-  setCached(mem.harvest, cacheKey, r, 8_000);
+  setCached(mem.harvest, cacheKey, r, 8000);
   return r;
 }
 
@@ -269,7 +276,12 @@ export async function appendBagStorage({ bagLabel, vineIds }) {
   const s = requireStorageSettings();
   return callApi(
     "appendBagStorage",
-    { spreadsheetId: s.storageSpreadsheetId, sheetName: s.bagStorageSheetName, bagLabel, vineIds },
+    {
+      spreadsheetId: s.storageSpreadsheetId,
+      sheetName: s.bagStorageSheetName,
+      bagLabel,
+      vineIds,
+    },
     { timeoutMs: 15000 }
   );
 }
@@ -278,7 +290,12 @@ export async function appendBinStorage({ binLabel, bagLabels }) {
   const s = requireStorageSettings();
   return callApi(
     "appendBinStorage",
-    { spreadsheetId: s.storageSpreadsheetId, sheetName: s.binStorageSheetName, binLabel, bagLabels },
+    {
+      spreadsheetId: s.storageSpreadsheetId,
+      sheetName: s.binStorageSheetName,
+      binLabel,
+      bagLabels,
+    },
     { timeoutMs: 15000 }
   );
 }
@@ -308,7 +325,12 @@ export async function removeBinStorageByBagLabels({ binLabel, bagLabels }) {
   const s = requireStorageSettings();
   return callApi(
     "removeBinStorageByBagLabels",
-    { spreadsheetId: s.storageSpreadsheetId, sheetName: s.binStorageSheetName, binLabel, bagLabels },
+    {
+      spreadsheetId: s.storageSpreadsheetId,
+      sheetName: s.binStorageSheetName,
+      binLabel,
+      bagLabels,
+    },
     { timeoutMs: 20000 }
   );
 }
@@ -317,10 +339,16 @@ function requirePackingSettings(needs = "or") {
   const s = normalizeSettings();
 
   const spreadsheetId = String(
-    s.packingSpreadsheetId || s.packingUnpackingSpreadsheetId || s.packingUnpackingId || s.packingSpreadsheetID || ""
+    s.packingSpreadsheetId ||
+      s.packingUnpackingSpreadsheetId ||
+      s.packingUnpackingId ||
+      s.packingSpreadsheetID ||
+      ""
   ).trim();
 
-  if (!spreadsheetId) throw new Error("Packing settings missing. Paste the Packing/Unpacking spreadsheet link first.");
+  if (!spreadsheetId) {
+    throw new Error("Packing settings missing. Paste the Packing/Unpacking spreadsheet link first.");
+  }
 
   const sheetName =
     needs === "grafting"
@@ -340,15 +368,27 @@ export async function getPackingRecordByLabel({ needs = "or", labelValue }) {
 
   const r = await callApi(
     "getPackingRecordByLabel",
-    { spreadsheetId: s.packingSpreadsheetId, sheetName: s._packingSheetName, needs, labelValue },
+    {
+      spreadsheetId: s.packingSpreadsheetId,
+      sheetName: s._packingSheetName,
+      needs,
+      labelValue,
+    },
     { timeoutMs: 12000 }
   );
 
-  setCached(mem.packing, key, r, 30_000);
+  setCached(mem.packing, key, r, 30000);
   return r;
 }
 
-export async function updatePackingByRow({ needs = "or", rowIndex, packingDate, binNumber, packingQuantity, noteAppend }) {
+export async function updatePackingByRow({
+  needs = "or",
+  rowIndex,
+  packingDate,
+  binNumber,
+  packingQuantity,
+  noteAppend,
+}) {
   const s = requirePackingSettings(needs);
   return callApi(
     "updatePackingByRow",
@@ -374,15 +414,26 @@ export async function getUnpackingRecordByLabel({ needs = "or", labelValue }) {
 
   const r = await callApi(
     "getUnpackingRecordByLabel",
-    { spreadsheetId: s.packingSpreadsheetId, sheetName: s._packingSheetName, needs, labelValue },
+    {
+      spreadsheetId: s.packingSpreadsheetId,
+      sheetName: s._packingSheetName,
+      needs,
+      labelValue,
+    },
     { timeoutMs: 12000 }
   );
 
-  setCached(mem.packing, key, r, 30_000);
+  setCached(mem.packing, key, r, 30000);
   return r;
 }
 
-export async function updateUnpackingByRow({ needs = "or", rowIndex, unpackingDate, unpackingQuantity, noteAppend }) {
+export async function updateUnpackingByRow({
+  needs = "or",
+  rowIndex,
+  unpackingDate,
+  unpackingQuantity,
+  noteAppend,
+}) {
   const s = requirePackingSettings(needs);
   return callApi(
     "updateUnpackingByRow",
@@ -426,10 +477,13 @@ export async function getGraftingRowsByCombinationLabel({ combinationLabelValue 
   );
 }
 
-// New helper for the updated grafting-packing flow:
-// first scan can match either "Scion White Code" or "Rootstock White Code",
-// then second scan is the "Combination Label".
-export async function getGraftingRowsBySingleAndCombinationLabel({ firstLabelValue, combinationLabelValue }) {
+// Main helper for the new grafting-packing flow:
+// first scan can match either "Scion White Code" or "Rootstock White Code"
+// then second scan is "Combination Label"
+export async function getGraftingRowsBySingleAndCombinationLabel({
+  firstLabelValue,
+  combinationLabelValue,
+}) {
   const s = requirePackingSettings("grafting");
   return callApi(
     "getGraftingRowsBySingleAndCombinationLabel",
@@ -441,6 +495,17 @@ export async function getGraftingRowsBySingleAndCombinationLabel({ firstLabelVal
     },
     { timeoutMs: 15000 }
   );
+}
+
+// Backward-compatible alias so either frontend import name works
+export async function getGraftingRowsByFirstAndCombination({
+  firstLabelValue,
+  combinationLabelValue,
+}) {
+  return getGraftingRowsBySingleAndCombinationLabel({
+    firstLabelValue,
+    combinationLabelValue,
+  });
 }
 
 export async function getLabelCheckRecordByTwoLabels({
