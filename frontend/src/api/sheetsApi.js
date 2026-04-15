@@ -26,16 +26,13 @@ function setCached(map, key, data, ttlMs) {
   map.set(key, { data, expiresAt: ttlMs ? now() + ttlMs : 0 });
 }
 
-// ---------- Settings normalization (critical compatibility layer) ----------
 function normalizeSettings() {
   const s = loadSettings() || {};
 
-  // Accept older key names and keep them in sync
   const itemsKeyColumn = String(s.itemsKeyColumn || s.keyColumn || "").trim();
   const itemsSpreadsheetId = String(s.itemsSpreadsheetId || "").trim();
   const itemsSheetName = String(s.itemsSheetName || "").trim();
 
-  // Mirror forward if only old key exists
   if (itemsKeyColumn && !s.itemsKeyColumn) {
     try {
       saveSettings({ itemsKeyColumn });
@@ -87,33 +84,26 @@ async function callApi(action, payload, opts = {}) {
   }
 }
 
-// ---------- Argument adapters (backward compatible) ----------
 function asObjHeaders(a, b) {
-  // Supports: getHeaders({spreadsheetId, sheetName}) OR getHeaders(spreadsheetId, sheetName)
   if (a && typeof a === "object") return a;
   return { spreadsheetId: a, sheetName: b };
 }
 
 function asObjKey(a) {
-  // Supports: fn({keyValue}) OR fn(keyValue)
   if (a && typeof a === "object") return a;
   return { keyValue: a };
 }
 
 function asObjUpdateItem(a, b) {
-  // Supports: updateItemByKey({keyValue, patch}) OR updateItemByKey(keyValue, patch)
   if (a && typeof a === "object") return a;
   return { keyValue: a, patch: b };
 }
 
 function asObjBulk(a, b) {
-  // Supports: bulkUpdate({keys, patch}) OR bulkUpdate(keysArray, patchObject)
-  // NOTE: arrays are objects in JS, so we must not treat arrays as the object-form payload.
   if (a && typeof a === "object" && !Array.isArray(a)) return a;
   return { keys: a, patch: b };
 }
 
-// ---------- Tabs ----------
 export async function getSheetTabs(spreadsheetId) {
   const id = String(spreadsheetId || "").trim();
   if (!id) throw new Error("Missing spreadsheetId");
@@ -127,7 +117,6 @@ export async function getSheetTabs(spreadsheetId) {
   return tabs;
 }
 
-// ---------- Items ----------
 export async function getHeaders(a, b) {
   const { spreadsheetId, sheetName } = asObjHeaders(a, b);
 
@@ -145,7 +134,6 @@ export async function getItemByKey(a) {
   const key = String(keyValue || "").trim();
   if (!key) throw new Error("Missing key value");
 
-  // Cache must include keyColumn; user can change key column in Setup.
   const cacheKey = `item::${s.itemsSpreadsheetId}::${s.itemsSheetName}::${s.itemsKeyColumn}::${key}`;
   const cached = getCached(mem.items, cacheKey);
   if (cached) return cached;
@@ -172,7 +160,7 @@ export async function updateItemByKey(a, b) {
   const key = String(keyValue || "").trim();
   if (!key) throw new Error("Missing key value");
 
-  const r = await callApi(
+  return callApi(
     "updateItemByKey",
     {
       spreadsheetId: s.itemsSpreadsheetId,
@@ -183,7 +171,6 @@ export async function updateItemByKey(a, b) {
     },
     { timeoutMs: 15000 }
   );
-  return r;
 }
 
 export async function bulkUpdate(a, b) {
@@ -194,7 +181,7 @@ export async function bulkUpdate(a, b) {
     throw new Error("bulkUpdate: keys must be a non-empty array");
   }
 
-  const r = await callApi(
+  return callApi(
     "bulkUpdate",
     {
       spreadsheetId: s.itemsSpreadsheetId,
@@ -205,10 +192,8 @@ export async function bulkUpdate(a, b) {
     },
     { timeoutMs: 30000 }
   );
-  return r;
 }
 
-// ---------- Harvest ----------
 function requireHarvestSettings() {
   const s = normalizeSettings();
   if (!s?.harvestSpreadsheetId) throw new Error("Harvest spreadsheet is not set. Please set it in Harvest page.");
@@ -224,7 +209,6 @@ export async function getItemAndHarvestByKey(a) {
   const key = String(keyValue || "").trim();
   if (!key) throw new Error("Missing key value");
 
-  // Cache must include keyColumn; user can change key column in Setup.
   const cacheKey = `item::${s.itemsSpreadsheetId}::${s.itemsSheetName}::${s.itemsKeyColumn}::${key}`;
   const cached = getCached(mem.harvest, cacheKey);
   if (cached) return cached;
@@ -245,12 +229,11 @@ export async function getItemAndHarvestByKey(a) {
 
 export async function appendHarvestLog(payload) {
   const h = requireHarvestSettings();
-  const r = await callApi(
+  return callApi(
     "appendHarvestLog",
     { spreadsheetId: h.harvestSpreadsheetId, sheetName: h.harvestSheetName, ...(payload || {}) },
     { timeoutMs: 15000 }
   );
-  return r;
 }
 
 export async function getHarvestLogByKey(itemKey) {
@@ -258,25 +241,22 @@ export async function getHarvestLogByKey(itemKey) {
   const key = String(itemKey || "").trim();
   if (!key) throw new Error("Missing itemKey");
 
-  const r = await callApi(
+  return callApi(
     "getHarvestLogByKey",
     { spreadsheetId: h.harvestSpreadsheetId, sheetName: h.harvestSheetName, itemKey: key },
     { timeoutMs: 12000 }
   );
-  return r;
 }
 
 export async function updateHarvestLogByRow(payload) {
   const h = requireHarvestSettings();
-  const r = await callApi(
+  return callApi(
     "updateHarvestLogByRow",
     { spreadsheetId: h.harvestSpreadsheetId, sheetName: h.harvestSheetName, ...(payload || {}) },
     { timeoutMs: 15000 }
   );
-  return r;
 }
 
-// ---------- Storage ----------
 function requireStorageSettings() {
   const s = normalizeSettings();
   if (!s?.storageSpreadsheetId) throw new Error("Storage spreadsheet is not set. Please set it in Storage pages.");
@@ -287,22 +267,20 @@ function requireStorageSettings() {
 
 export async function appendBagStorage({ bagLabel, vineIds }) {
   const s = requireStorageSettings();
-  const r = await callApi(
+  return callApi(
     "appendBagStorage",
     { spreadsheetId: s.storageSpreadsheetId, sheetName: s.bagStorageSheetName, bagLabel, vineIds },
     { timeoutMs: 15000 }
   );
-  return r;
 }
 
 export async function appendBinStorage({ binLabel, bagLabels }) {
   const s = requireStorageSettings();
-  const r = await callApi(
+  return callApi(
     "appendBinStorage",
     { spreadsheetId: s.storageSpreadsheetId, sheetName: s.binStorageSheetName, binLabel, bagLabels },
     { timeoutMs: 15000 }
   );
-  return r;
 }
 
 export async function getExistingChildrenForParent({ mode, parentLabel }) {
@@ -319,25 +297,22 @@ export async function getExistingChildrenForParent({ mode, parentLabel }) {
 
 export async function findBinForBagLabel({ bagLabel }) {
   const s = requireStorageSettings();
-  const r = await callApi(
+  return callApi(
     "findBinForBagLabel",
     { spreadsheetId: s.storageSpreadsheetId, sheetName: s.binStorageSheetName, bagLabel },
     { timeoutMs: 12000 }
   );
-  return r;
 }
 
 export async function removeBinStorageByBagLabels({ binLabel, bagLabels }) {
   const s = requireStorageSettings();
-  const r = await callApi(
+  return callApi(
     "removeBinStorageByBagLabels",
     { spreadsheetId: s.storageSpreadsheetId, sheetName: s.binStorageSheetName, binLabel, bagLabels },
     { timeoutMs: 20000 }
   );
-  return r;
 }
 
-// ---------- Packing / Unpacking ----------
 function requirePackingSettings(needs = "or") {
   const s = normalizeSettings();
 
@@ -375,7 +350,7 @@ export async function getPackingRecordByLabel({ needs = "or", labelValue }) {
 
 export async function updatePackingByRow({ needs = "or", rowIndex, packingDate, binNumber, packingQuantity, noteAppend }) {
   const s = requirePackingSettings(needs);
-  const r = await callApi(
+  return callApi(
     "updatePackingByRow",
     {
       spreadsheetId: s.packingSpreadsheetId,
@@ -389,7 +364,6 @@ export async function updatePackingByRow({ needs = "or", rowIndex, packingDate, 
     },
     { timeoutMs: 15000 }
   );
-  return r;
 }
 
 export async function getUnpackingRecordByLabel({ needs = "or", labelValue }) {
@@ -410,7 +384,7 @@ export async function getUnpackingRecordByLabel({ needs = "or", labelValue }) {
 
 export async function updateUnpackingByRow({ needs = "or", rowIndex, unpackingDate, unpackingQuantity, noteAppend }) {
   const s = requirePackingSettings(needs);
-  const r = await callApi(
+  return callApi(
     "updateUnpackingByRow",
     {
       spreadsheetId: s.packingSpreadsheetId,
@@ -423,13 +397,11 @@ export async function updateUnpackingByRow({ needs = "or", rowIndex, unpackingDa
     },
     { timeoutMs: 15000 }
   );
-  return r;
 }
 
-// ---------- Grafting selection helpers ----------
 export async function getGraftingRowsByScionRootstock({ scionLabelValue, rootstockLabelValue }) {
   const s = requirePackingSettings("grafting");
-  const r = await callApi(
+  return callApi(
     "getGraftingRowsByScionRootstock",
     {
       spreadsheetId: s.packingSpreadsheetId,
@@ -439,12 +411,11 @@ export async function getGraftingRowsByScionRootstock({ scionLabelValue, rootsto
     },
     { timeoutMs: 15000 }
   );
-  return r;
 }
 
 export async function getGraftingRowsByCombinationLabel({ combinationLabelValue }) {
   const s = requirePackingSettings("grafting");
-  const r = await callApi(
+  return callApi(
     "getGraftingRowsByCombinationLabel",
     {
       spreadsheetId: s.packingSpreadsheetId,
@@ -453,10 +424,25 @@ export async function getGraftingRowsByCombinationLabel({ combinationLabelValue 
     },
     { timeoutMs: 15000 }
   );
-  return r;
 }
 
-// ---------- Label Check ----------
+// New helper for the updated grafting-packing flow:
+// first scan can match either "Scion White Code" or "Rootstock White Code",
+// then second scan is the "Combination Label".
+export async function getGraftingRowsBySingleAndCombinationLabel({ firstLabelValue, combinationLabelValue }) {
+  const s = requirePackingSettings("grafting");
+  return callApi(
+    "getGraftingRowsBySingleAndCombinationLabel",
+    {
+      spreadsheetId: s.packingSpreadsheetId,
+      sheetName: s._packingSheetName,
+      firstLabelValue: String(firstLabelValue || "").trim(),
+      combinationLabelValue: String(combinationLabelValue || "").trim(),
+    },
+    { timeoutMs: 15000 }
+  );
+}
+
 export async function getLabelCheckRecordByTwoLabels({
   spreadsheetId,
   sheetName,
@@ -472,7 +458,7 @@ export async function getLabelCheckRecordByTwoLabels({
   if (!String(firstLabelValue || "").trim()) throw new Error("Missing firstLabelValue");
   if (!String(secondLabelValue || "").trim()) throw new Error("Missing secondLabelValue");
 
-  const r = await callApi(
+  return callApi(
     "getLabelCheckRecordByTwoLabels",
     {
       spreadsheetId: String(spreadsheetId).trim(),
@@ -484,7 +470,6 @@ export async function getLabelCheckRecordByTwoLabels({
     },
     { timeoutMs: 15000 }
   );
-  return r;
 }
 
 export async function getLabelCheckRowsByTwoLabels({
@@ -502,7 +487,7 @@ export async function getLabelCheckRowsByTwoLabels({
   if (!String(firstLabelValue || "").trim()) throw new Error("Missing firstLabelValue");
   if (!String(secondLabelValue || "").trim()) throw new Error("Missing secondLabelValue");
 
-  const r = await callApi(
+  return callApi(
     "getLabelCheckRowsByTwoLabels",
     {
       spreadsheetId: String(spreadsheetId).trim(),
@@ -514,5 +499,4 @@ export async function getLabelCheckRowsByTwoLabels({
     },
     { timeoutMs: 15000 }
   );
-  return r;
 }
