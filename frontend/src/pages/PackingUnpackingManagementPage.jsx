@@ -5,7 +5,7 @@ import {
   getUnpackingRecordByLabel,
   updatePackingByRow,
   updateUnpackingByRow,
-  getGraftingRowsByFirstAndCombination,
+  getGraftingRowsBySingleAndCombinationLabel,
   getGraftingRowsByCombinationLabel,
 } from "../api/sheetsApi";
 import { loadSettings, saveSettings } from "../store/settingsStore";
@@ -558,7 +558,7 @@ export default function PackingUnpackingManagementPage() {
         if (!combinationLabelScanned) return setError("Empty QR result.");
 
         try {
-          const res = await getGraftingRowsByFirstAndCombination({
+          const res = await getGraftingRowsBySingleAndCombinationLabel({
             firstLabelValue: firstCode,
             combinationLabelValue: combinationLabelScanned,
           });
