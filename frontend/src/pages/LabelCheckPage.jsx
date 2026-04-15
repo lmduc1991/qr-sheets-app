@@ -3,7 +3,7 @@ import { loadSettings, saveSettings, onSettingsChange } from "../store/settingsS
 import { getSheetTabs, getHeaders, getLabelCheckRowsByTwoLabels } from "../api/sheetsApi";
 import { startQrScanner } from "../utils/qrScanner";
 
-const DUPLICATE_COMBO_NO_MSG = "There are duplicated values in the Combination Label No. column";
+const MULTI_SIZE_MSG = "Multiple Rows Same Size";
 
 function extractSpreadsheetId(urlOrId) {
   const s = String(urlOrId || "").trim();
@@ -19,6 +19,10 @@ function popup(msg) {
   } catch {
     // ignore
   }
+}
+
+function uniqueSizes(rows = []) {
+  return Array.from(new Set(rows.map((row) => String(row?.size || "").trim()).filter(Boolean)));
 }
 
 function PrettyDetails({ record, preferredOrder = [] }) {
@@ -104,7 +108,7 @@ export default function LabelCheckPage() {
   const [matchedRowIndex, setMatchedRowIndex] = useState(null);
   const [matchedRecord, setMatchedRecord] = useState(null);
   const [selectionRows, setSelectionRows] = useState([]);
-  const [selectedCombinationLabelNo, setSelectedCombinationLabelNo] = useState("");
+  const [selectedSize, setSelectedSize] = useState("");
 
   const scannerRef = useRef(null);
   const scanLockRef = useRef(false);
@@ -164,7 +168,7 @@ export default function LabelCheckPage() {
     setMatchedRowIndex(null);
     setMatchedRecord(null);
     setSelectionRows([]);
-    setSelectedCombinationLabelNo("");
+    setSelectedSize("");
   };
 
   const loadTabs = async () => {
@@ -243,18 +247,13 @@ export default function LabelCheckPage() {
 
     setHeaders(res.headers || []);
 
-    if (res?.duplicateCombinationLabelNo) {
-      popup(DUPLICATE_COMBO_NO_MSG);
-      await resetFlow();
-      return;
-    }
-
     const rows = Array.isArray(res.rows) ? res.rows : [];
     if (rows.length > 1) {
+      const sizes = uniqueSizes(rows);
       setSelectionRows(rows);
-      setSelectedCombinationLabelNo(String(rows[0]?.combinationLabelNo || ""));
-      setStep("selectCombinationNo");
-      setStatus("Choose the Combination Label No. to open the matched record.");
+      setSelectedSize(sizes[0] || "");
+      setStep("selectSize");
+      setStatus("Choose the Size to open the matched record.");
       return;
     }
 
@@ -279,7 +278,7 @@ export default function LabelCheckPage() {
     setMatchedRowIndex(null);
     setMatchedRecord(null);
     setSelectionRows([]);
-    setSelectedCombinationLabelNo("");
+    setSelectedSize("");
     setStep("scanFirst");
 
     await stopScanner();
@@ -315,15 +314,16 @@ export default function LabelCheckPage() {
   };
 
   const confirmSelection = async () => {
-    const selected = selectionRows.find(
-      (row) => String(row?.combinationLabelNo || "") === String(selectedCombinationLabelNo || "")
-    );
+    const size = String(selectedSize || "").trim().toLowerCase();
+    const filtered = selectionRows.filter((row) => String(row?.size || "").trim().toLowerCase() === size);
 
-    if (!selected) {
-      setError("Please choose a Combination Label No.");
+    if (filtered.length !== 1) {
+      popup(MULTI_SIZE_MSG);
+      await resetFlow();
       return;
     }
 
+    const selected = filtered[0];
     setMatchedRowIndex(selected.rowIndex || null);
     setMatchedRecord(selected.record || null);
     setSelectionRows([]);
@@ -471,7 +471,7 @@ export default function LabelCheckPage() {
         </div>
       )}
 
-      {step === "selectCombinationNo" && (
+      {step === "selectSize" && (
         <div className="card">
           <div style={{ marginBottom: 12 }}>
             <strong>First label:</strong> {firstScanned}
@@ -481,14 +481,11 @@ export default function LabelCheckPage() {
           </div>
 
           <label className="field">
-            Choose Combination Label No.
-            <select
-              value={selectedCombinationLabelNo}
-              onChange={(e) => setSelectedCombinationLabelNo(e.target.value)}
-            >
-              {selectionRows.map((row) => (
-                <option key={`${row.rowIndex}-${row.combinationLabelNo}`} value={String(row.combinationLabelNo || "")}>
-                  {String(row.combinationLabelNo || "(blank)")}
+            Choose Size
+            <select value={selectedSize} onChange={(e) => setSelectedSize(e.target.value)}>
+              {uniqueSizes(selectionRows).map((size) => (
+                <option key={size} value={size}>
+                  {size}
                 </option>
               ))}
             </select>
