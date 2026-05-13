@@ -565,3 +565,32 @@ export async function getLabelCheckRowsByTwoLabels({
     { timeoutMs: 15000 }
   );
 }
+
+export async function getLabelCheckRowsByOneToMany({
+  spreadsheetId,
+  sheetName,
+  columnA,
+  columnB,
+  columnAValue,
+  columnBValue,
+}) {
+  if (!String(spreadsheetId || "").trim()) throw new Error("Missing spreadsheetId");
+  if (!String(sheetName || "").trim()) throw new Error("Missing sheetName");
+  if (!String(columnA || "").trim()) throw new Error("Missing columnA");
+  if (!String(columnB || "").trim()) throw new Error("Missing columnB");
+  if (!String(columnAValue || "").trim()) throw new Error("Missing columnAValue");
+  if (!String(columnBValue || "").trim()) throw new Error("Missing columnBValue");
+
+  return callApi(
+    "getLabelCheckRowsByOneToMany",
+    {
+      spreadsheetId: String(spreadsheetId).trim(),
+      sheetName: String(sheetName).trim(),
+      columnA: String(columnA).trim(),
+      columnB: String(columnB).trim(),
+      columnAValue: String(columnAValue).trim(),
+      columnBValue: String(columnBValue).trim(),
+    },
+    { timeoutMs: 15000 }
+  );
+}
